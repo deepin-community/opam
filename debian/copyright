@@ -1,0 +1,86 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: https://opam.ocaml.org/
+
+Files: *
+Copyright: 2012-2019 OcamlPro
+           2012      INRIA
+License: LGPL-3 with linking exception
+
+Files: debian/*
+Copyright: 2013-2019 Mehdi Dogguy <mehdi@debian.org>
+           2018-2019 Nicolas Braud-Santoni <nicoo@debian.org>
+License: GPL-3
+ The Debian packaging is licensed under the GPL version 3,
+ see `/usr/share/common-licenses/GPL-3'.
+
+Files: m4/ax_compare_version.m4
+Copyright: © 2008 Tim Toolan <toolan@ele.uri.edu>
+License: Other
+ Copying and distribution of this file, with or without modification, are
+ permitted in any medium without royalty provided the copyright notice
+ and this notice are preserved. This file is offered as-is, without any
+ warranty.
+
+Files: m4/ocaml.m4
+Copyright: © 2009      Richard W.M. Jones
+           © 2009      Stefano Zacchiroli
+           © 2000-2005 Olivier Andrieu
+           © 2000-2005 Jean-Christophe Filliâtre
+           © 2000-2005 Georges Mariano
+License: BSD-3
+
+Files: configure
+Copyright: © 2012-2015 OcamlPro
+           © 2012      Free Software Foundation
+License: FSFUL
+ This configure script is free software; the Free Software Foundation
+ gives unlimited permission to copy, distribute and modify it.
+
+Files: tests/* doc/*
+Copyright: © 2011-2018 OcamlPro
+License: LGPL-3 with linking exception
+
+License: LGPL-3 with linking exception
+ As a special exception to the GNU Lesser General Public License, you
+ may link, statically or dynamically, a "work that uses the Library"
+ with a publicly distributed version of the Library to produce an
+ executable file containing portions of the Library, and distribute
+ that executable file under terms of your choice, without any of the
+ additional requirements listed in clause 6 of the GNU Library General
+ Public License.  By "a publicly distributed version of the Library",
+ we mean either the unmodified Library as distributed by the copyright
+ holder, or a modified version of the Library that is distributed under
+ the conditions defined in clause 3 of the GNU Library General Public
+ License.  This exception does not however invalidate any other reasons
+ why the executable file might be covered by the GNU Lesser General
+ Public License.
+ .
+ The text of the LGPL version 3 can be found, on Debian systems, under
+ `/usr/share/common-licenses/LGPL-3'.
+
+License: BSD-3
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright
+ notice, this list of conditions and the following disclaimer in the
+ documentation and/or other materials provided with the distribution.
+ * The names of the contributors may not be used to endorse or promote
+ products derived from this software without specific prior written
+ permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ''AS IS''
+ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR
+ CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ .
+ ocaml.m4 is shipped in the ocaml-tools Debian package.

@@ -1,0 +1,134 @@
+Source: opam
+Section: ocaml
+Priority: optional
+Maintainer: Debian OCaml Maintainers <debian-ocaml-maint@lists.debian.org>
+Uploaders:
+ Mehdi Dogguy <mehdi@debian.org>,
+ Nicolas Braud-Santoni <nicoo@debian.org>
+Build-Depends:
+ debhelper-compat (= 12),
+ ocaml-nox (>= 4.3.0~),
+ ocamlbuild,
+ cppo (>= 1.6.0),
+ ocaml-findlib (>= 1.2.4),
+ dh-ocaml (>= 0.9),
+ dune,
+ libcudf-ocaml-dev,
+ libdose3-ocaml-dev (>= 6.0.1~),
+ libre-ocaml-dev (>= 1.7.2~),
+ libcmdliner-ocaml-dev (>= 1.0.2~),
+ libextlib-ocaml-dev,
+ libmccs-ocaml-dev,
+ libocamlgraph-ocaml-dev (>= 1.8),
+ libopam-file-format-ocaml-dev (>= 2.1.2-2~),
+ curl
+Build-Depends-Indep:
+ texlive-latex-base,
+ texlive-lang-french,
+ texlive-latex-extra,
+ texlive-latex-recommended,
+ texlive-fonts-recommended,
+ pandoc,
+ latex-make
+Standards-Version: 4.4.0
+Rules-Requires-Root: no
+Homepage: https://opam.ocaml.org
+Vcs-Git: https://salsa.debian.org/ocaml-team/opam.git
+Vcs-Browser: https://salsa.debian.org/ocaml-team/opam
+Testsuite: autopkgtest
+
+Package: opam
+Architecture: any
+Depends:
+ ${ocaml:Depends},
+ ${shlibs:Depends},
+ ${misc:Depends},
+ opam-doc (= ${source:Version}),
+ build-essential,
+ opam-installer,
+ bubblewrap [linux-any],
+ unzip,
+ wget | curl
+Recommends:
+ ocaml,
+ git,
+ darcs,
+ mercurial,
+ m4,
+ rsync,
+ ca-certificates
+Description: package manager for OCaml
+ OPAM stands for OCaml PAckage Manager. It aims to suit to a vast number
+ of users and use cases, and has unique features:
+  * Powerful handling of dependencies: versions constraints, optional
+    dependencies, conflicts, etc.
+  * Multiple repositories backends: HTTP, rsync, git
+  * Ease to create packages and repositories
+  * Ability to switch between different compiler versions
+ .
+ Typically, OPAM will probably make your life easier if you recognize
+ yourself in at least one of these profiles:
+  * You use multiple versions of the OCaml compiler, or you hack the compiler
+    yourself and needs to frequently switch between compiler versions.
+  * You use or develop software that needs a specific and/or modified version
+    of the OCaml compiler to be installed.
+  * You use or develop software that depends on a specific version of an OCaml
+    library, or you just want to install a specific version of a package, not
+    just the latest one.
+  * You want to create your own packages yourself, put them on your own
+    repository, with minimal effort.
+
+Package: opam-doc
+Architecture: all
+Multi-Arch: foreign
+Section: doc
+Depends:
+ ${ocaml:Depends},
+ ${shlibs:Depends},
+ ${misc:Depends}
+Breaks: opam-docs
+Replaces: opam-docs
+Description: package manager for OCaml (documentation)
+ OPAM stands for OCaml PAckage Manager. It aims to suit to a vast number
+ of users and use cases, and has unique features:
+  * Powerful handling of dependencies: versions constraints, optional
+    dependencies, conflicts, etc.
+  * Multiple repositories backends: HTTP, rsync, git
+  * Ease to create packages and repositories
+  * Ability to switch between different compiler versions
+ .
+ Typically, OPAM will probably make your life easier if you recognize
+ yourself in at least one of these profiles:
+  * You use multiple versions of the OCaml compiler, or you hack the compiler
+    yourself and needs to frequently switch between compiler versions.
+  * You use or develop software that needs a specific and/or modified version
+    of the OCaml compiler to be installed.
+  * You use or develop software that depends on a specific version of an OCaml
+    library, or you just want to install a specific version of a package, not
+    just the latest one.
+  * You want to create your own packages yourself, put them on your own
+    repository, with minimal effort.
+ .
+ This package contains manpages and general documentation about OPAM.
+
+Package: opam-installer
+Architecture: any
+Breaks: opam (<< 2.0.7-2),
+        opam-docs (<< 2.0.0-1)
+Replaces: opam (<< 2.0.7-2),
+          opam-docs (<< 2.0.0-1)
+Depends:
+ ${ocaml:Depends},
+ ${shlibs:Depends},
+ ${misc:Depends}
+Description: Utility handling (un)installation of Opam .install files
+ opam-installer is a small utility, part of Opam, that can interpret
+ Opam's .install files and take the appropriate actions.
+ .
+ OPAM stands for OCaml PAckage Manager. It aims to suit to a vast number
+ of users and use cases, and has unique features:
+  * Powerful handling of dependencies: versions constraints, optional
+    dependencies, conflicts, etc.
+  * Multiple repositories backends: HTTP, rsync, git
+  * Ease to create packages and repositories
+  * Ability to switch between different compiler versions

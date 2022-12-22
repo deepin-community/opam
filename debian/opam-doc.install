@@ -1,0 +1,5 @@
+usr/share/man/man1/opam.1
+usr/share/man/man1/opam-[a-hj-z]*.1
+usr/share/man/man1/opam-info.1
+usr/share/man/man1/opam-init.1
+usr/share/man/man1/opam-install.1

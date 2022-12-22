@@ -1,0 +1,1 @@
+opam-installer: hardening-no-fortify-functions usr/bin/opam-installer

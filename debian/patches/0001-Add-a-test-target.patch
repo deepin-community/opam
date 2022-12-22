@@ -1,0 +1,23 @@
+From: Mehdi Dogguy <mehdi@debian.org>
+Date: Thu, 23 Aug 2018 21:48:58 +0200
+Subject: Add a 'test' target
+
+This patch is useful only for Debian: It helps dh_auto_test to detect
+that there is a testsuite and run it accordingly. dh_auto_test checks
+'test' and 'check' targets, but not 'tests'.
+---
+ Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Makefile b/Makefile
+index b9453c9..724de92 100644
+--- a/Makefile
++++ b/Makefile
+@@ -153,6 +153,7 @@ checker:
+ 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) src/tools/opam_check.exe
+ 
+ .PHONY: tests tests-local tests-git
++test: tests
+ tests: $(DUNE_DEP)
+ 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) opam.install src/tools/opam_check.exe
+ 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) doc/man/opam-topics.inc doc/man/opam-admin-topics.inc

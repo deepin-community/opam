@@ -1,0 +1,7 @@
+Tests: 4.08.1 ocaml-system
+Depends: @, ca-certificates
+Restrictions: isolation-container, allow-stderr
+# Container (or greater) isolation seems required for bwrap to work correctly
+
+Tests: ocaml-system
+Depends: ocaml-nox

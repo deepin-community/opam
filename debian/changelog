@@ -1,0 +1,277 @@
+opam (2.0.8-1) unstable; urgency=medium
+
+  * New (bugfix) upstream release
+  * Add patch 0004-Use-HOME-env-variable-instead-of.patch to use env
+    variable HOME instead of relying on ~
+  * Add patch 0005-Port-to-Dose3-6.0.1.patch so that opam builds with
+    Dose3 6.0.1
+  * Bump build dependency on libdose3-ocaml-dev to >= 6.0.1~
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 28 Feb 2021 20:00:48 +0100
+
+opam (2.0.7-3) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Mark opam-doc Multi-Arch: foreign (Closes: #940323)
+
+  [ Mehdi Dogguy ]
+  * Set a fixed and fake HOME directory so that it doesn't change
+    in generated documentation
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Mon, 01 Feb 2021 22:09:37 +0100
+
+opam (2.0.7-2) unstable; urgency=medium
+
+  * Move documentation files back in opam-installer and update needed
+    Breaks/Replaces in opam-installer's stanza (Closes: #980309)
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 17 Jan 2021 21:21:31 +0100
+
+opam (2.0.7-1) unstable; urgency=medium
+
+  * New minor upstream release (Closes: #975853)
+  * Bump Build-Depend on libopam-file-format-ocaml-dev to (>= 2.1.2-2~)
+  * Update opam{,-installer}.install files following changes made upstream
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 17 Jan 2021 11:00:31 +0100
+
+opam (2.0.5-1) unstable; urgency=medium
+
+  * New upstream version 2.0.5
+    + Forward-compatibility improvements (OCaml 4.08, Dune 1.7 and later, ...)
+    + Numerous bugfixes
+    + Patch typos
+    + Fixup opam's version number in debian/rules
+      Upstream's tarball has the wrong version number set.
+
+  * Build OPAM with its internal solver; add dependency on ocaml-mccs.
+  * Remove dependency on external CUDF solvers. (Closes: #908203, #907636)
+  * Add basic autopkgtest (opam init && opam install some packages)
+    This is sufficient to catch #907636
+
+  * opam: Replace {pre,post}* scripts with a declarative maintscript
+  * Switch to debhelper 12, remove the old-style debian/compat.
+    This is because dh's compatibility level 12 hard-errors on maintscript issues.
+    dh 12 is available in stretch-backports, buster, and later.
+
+  * debian/control: Remove unnecessary dependencies
+  * Update authorship information (dates, email, ...)
+  * Declare compliance with policy 4.4.0
+  * Override spurious Lintian warnings
+
+ -- Nicolas Braud-Santoni <nicoo@debian.org>  Sat, 17 Aug 2019 17:37:02 +0200
+
+opam (2.0.3-1) unstable; urgency=medium
+
+  * New (bugfix) upstream release
+  * Restrict dependency on bubblewrap on [linux-any] (Closes: #918345)
+  * Update patches
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Fri, 01 Feb 2019 12:05:09 +0100
+
+opam (2.0.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Remove patch integrated by upstream:
+    - 0001-Configure-user-identity-in-the-test-Git-repository.patch
+  * Do not try to build (and ship) dev-manual.pdf as it is not
+    provided in upstream's tarball anymore
+  * Add patch to fix spelling errors in manpages and binaries
+    - 0002-Fix-spelling-error-in-manpage.patch
+  * Update copyright file
+  * Rename opam-docs package into opam-doc
+  * Ship README.md and CHANGES files in opam-installer
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 02 Dec 2018 14:37:00 +0100
+
+opam (2.0.0-5) unstable; urgency=medium
+
+  * Team upload.
+  * debian/rules: create separate targets build-indep and build-arch
+    (Closes: #909542).
+  * invoke in opam/{preinst,postint,postrm} dpkg-maintscript-helper
+    to handle the transition of /usr/share/doc/opam from a directory
+    to a symlink (Closes: #910222).
+  * install README.md and CHANGES into package opam-docs. Do not install
+    extra LICENSE file, add it to debian/not-installed.
+  * drop invocation of dh-exec in opam-installer.install, drop
+    build-dependency dh-exec.
+  * list extra files to remove by dh_clean in debian/clean.
+  * drop duplicated build-dependency cppo.
+  * change build-dependency on jbuilder to dune.
+
+ -- Ralf Treinen <treinen@debian.org>  Sat, 20 Oct 2018 12:16:56 +0200
+
+opam (2.0.0-4) unstable; urgency=medium
+
+  * Add a strict dependency on bubblewrap (Closes: #909086)
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sat, 22 Sep 2018 11:45:08 +0200
+
+opam (2.0.0-3) unstable; urgency=high
+
+  * debian/control
+    + Fix typo in Breaks+Replaces for opam-installer (Closes: #907403)
+    + Fix typo in the Description of opam-installer
+
+ -- Nicolas Braud-Santoni <nicolas@braud-santoni.eu>  Sat, 08 Sep 2018 02:04:24 +0200
+
+opam (2.0.0-2) unstable; urgency=high
+
+  * opam-installer Replaces opam-docs (<< 2.0.0-1)
+    Closes: #907403
+
+  * Declare compliance with policy v4.2.1.
+    No change required.
+
+ -- Nicolas Braud-Santoni <nicolas@braud-santoni.eu>  Tue, 04 Sep 2018 03:23:49 +0200
+
+opam (2.0.0-1) unstable; urgency=medium
+
+  [Nicolas Braud-Santoni]
+  * Team upload.
+  * Add myself to uploaders.
+  * Split opam-installer in its own package
+    Symlink usr/share/doc/opam to opam-installer
+  * New upstream version 2.0.0 (2018-07-24)
+    - Add jbuilder, cppo and libopam-file-format-ocaml-dev to Build-Depends
+    - Remove obsolete patches
+    - Fix the upstream testsuite
+
+  * Update debian/copyright
+  * Update debian/watch
+    - Switch to uscan 4
+    - Use github.com/ocaml/opam
+    - Correctly handle pre-releases (alpha, beta, rc)
+    - Correctly name the downloaded tarball
+
+  * Bump Standards-Version to 4.1.5
+    - debian/copyright: Use HTTPS for the format URI
+    - Set Rules-Requires-Root to no
+
+  * Update homepage to https://opam.ocaml.org
+
+  * debian/copyright: Fix license information.
+    - LICENSE states LGPL, with a linking exception, not GPL.
+    - Use FSFUL label for corresponding license
+
+  * Switch to debhelper 11
+  * debian/rules
+    - Rely dh_auto_test to correctly skip tests when needed
+    - Fail on missing installable files
+
+  [ Mehdi Dogguy ]
+  * Add aspcud to Build-Depends as it is needed to run the testsuite
+  * Move the packaging repository to salsa.debian.org
+  * Add 'm4' in Recommends (LP: #1289944)
+  * Promote solvers aspcud, mccs and packup as dependencies
+  * Specify libdir when running configure script
+  * Remove obsolete override_dh_{auto_,}install targets
+  * It is not necessary to depend on 'tar' (Closes: #900118)
+  * Constraint minimal required versions for:
+    - ocaml >= 4.3.0
+    - ocaml-re >= 1.7.2
+    - cmdliner >= 1.0.2
+  * Add git and openssl to build-depends (needed for the test-suite)
+  * Add a 'test' target in upstream's Makefile so that dh_auto_test runs the
+    test-suite.
+    - Add patch 0002-Add-a-test-target.patch
+
+ -- Nicolas Braud-Santoni <nicolas@braud-santoni.eu>  Fri, 03 Aug 2018 21:31:15 +0800
+
+opam (1.2.2-6) unstable; urgency=medium
+
+  * Team upload
+  * Add ocamlbuild to Build-Depends
+  * Update Vcs-*
+
+ -- Stéphane Glondu <glondu@debian.org>  Fri, 21 Jul 2017 18:06:52 +0200
+
+opam (1.2.2-5) unstable; urgency=medium
+
+  * Stop using insecure and no-check-certificate flags (Closes: #818081).
+    - add patch 0003-remove-insecure-no-check-certificate-flags.patch
+    Thanks to Ximin Luo for submitting the bug and providing the patch.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sat, 19 Mar 2016 08:44:34 +0100
+
+opam (1.2.2-4) unstable; urgency=medium
+
+  * Fix integration with fish shell (Closes: #805270)
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Tue, 22 Dec 2015 12:17:38 +0100
+
+opam (1.2.2-3) unstable; urgency=medium
+
+  * Port to Dose3 4.0.1 (Closes: #797451)
+    - Add 0001-Port-to-Dose3-4.0.1.patch
+    - Bump build-dependency on dose3 to >= 4.0.1-2~
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Mon, 14 Sep 2015 23:17:07 +0200
+
+opam (1.2.2-2) unstable; urgency=medium
+
+  * Run testsuite only on native architectures: Testsuite uses ocamlopt
+    unconditionally, which fails on bytecode architectures. Next upstream
+    release might fix that.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Thu, 30 Jul 2015 21:35:28 +0000
+
+opam (1.2.2-1) unstable; urgency=medium
+
+  * New upstream release.
+    - New Build-Dependency: libjsonm-ocaml-dev
+    - Drop old patches.
+    - Requires libcmdliner-ocaml-dev (>= 0.9.7)
+  * Use upstream's makefile based build system instead of crafting our
+    own one.
+  * Run package tests at build-time (Closes: #766487)
+    - New Build-Dependencies: rsync and unzip.
+  * Bump Standards-Version to 3.9.6, no changes required.
+  * Update d/copyright file
+  * Make opam recommend darcs and mercurial (Closes: #766985).
+  * Make opam depend on tar and unzip.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Tue, 28 Jul 2015 23:09:04 +0000
+
+opam (1.2.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Make opam recommend aspcud (Addresses: #766985).
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Mon, 03 Nov 2014 22:29:08 +0100
+
+opam (1.2.0~rc4-1) unstable; urgency=medium
+
+  * Import new uptream release.
+  * Do not call make autogen anymore
+  * Refresh patch 0001-Fix-some-spelling-errors.patch
+  * Bump minimal requirement on dose3 to 3.3~.
+  * Import Uutf and Jsonm temporarily.
+  * Build and install opam-installer
+  * Generate core/opamGitVersion.ml core/opamScript.ml during the configure phase
+  * scripts/ directory has been renamed into tools/
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Thu, 23 Oct 2014 00:04:41 +0200
+
+opam (1.1.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 02 Feb 2014 11:13:43 +0100
+
+opam (1.1.0-1) unstable; urgency=low
+
+  * New upstream release.
+    + Update patch (fix spelling errors).
+  * Link against "re.str", added in debian/buildsys/myocamlbuild.ml.
+  * Only install "opam" and "opam-admin" binaries, as upstream does.
+  * Add build-essential to Depends and ocaml to Recommends.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 24 Nov 2013 15:46:57 +0100
+
+opam (1.0.0-1) unstable; urgency=low
+
+  * Initial upload (Closes: #641986)
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 16 Jun 2013 15:03:14 +0200

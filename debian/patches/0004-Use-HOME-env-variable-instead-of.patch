@@ -1,0 +1,38 @@
+From: Mehdi Dogguy <mehdi@debian.org>
+Date: Sun, 21 Feb 2021 10:39:55 +0100
+Subject: Use HOME env variable instead of ~
+
+---
+ src/client/opamAdminCommand.ml     | 3 ++-
+ src/client/opamAdminRepoUpgrade.ml | 3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/opamAdminCommand.ml b/src/client/opamAdminCommand.ml
+index dca5490..49642cb 100644
+--- a/src/client/opamAdminCommand.ml
++++ b/src/client/opamAdminCommand.ml
+@@ -261,7 +261,8 @@ let add_hashes_command_doc =
+ let add_hashes_command =
+   let command = "add-hashes" in
+   let doc = add_hashes_command_doc in
+-  let cache_dir = OpamFilename.Dir.of_string "~/.cache/opam-hash-cache" in
++  let home = try Sys.getenv "HOME" with Not_found -> Sys.getcwd () in
++  let cache_dir = OpamFilename.Dir.of_string (Filename.concat home "/.cache/opam-hash-cache") in
+   let man = [
+     `S "DESCRIPTION";
+     `P (Printf.sprintf
+diff --git a/src/client/opamAdminRepoUpgrade.ml b/src/client/opamAdminRepoUpgrade.ml
+index 704a009..0be53b2 100644
+--- a/src/client/opamAdminRepoUpgrade.ml
++++ b/src/client/opamAdminRepoUpgrade.ml
+@@ -145,8 +145,9 @@ let all_base_packages =
+     ])
+ 
+ let cache_file : string list list OpamFile.t =
++  let home = try Sys.getenv "HOME" with Not_found -> Sys.getcwd () in
+   OpamFile.make @@
+-  OpamFilename.of_string "~/.cache/opam-compilers-to-packages/url-hashes"
++  OpamFilename.of_string (Filename.concat home "/.cache/opam-compilers-to-packages/url-hashes")
+ 
+ let do_upgrade repo_root =
+   let repo = OpamRepositoryBackend.local repo_root in

@@ -1,0 +1,52 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+export DH_VERBOSE=1
+export DH_OPTIONS=-v
+export JBUILDER_ARGS=--verbose
+
+DESTDIR=$(CURDIR)/debian/tmp
+include /usr/share/ocaml/ocamlvars.mk
+OCAMLFIND_DESTDIR=$(DESTDIR)/$(OCAML_STDLIB_DIR)
+
+%:
+	dh $@ --with ocaml
+
+.PHONY: override_dh_auto_configure
+override_dh_auto_configure: .configure_stamp
+
+.configure_stamp:
+	# Upstream shipped a release tarball with the wrong version
+	sed -i 's/2\.0\.4/2.0.5/g' configure
+	./configure --prefix=/usr --libdir=$(OCAML_STDLIB_DIR) \
+		--enable-certificate-check
+	touch .configure_stamp
+
+.PHONY: override_dh_auto_build
+override_dh_auto_build:
+# do nothing
+
+build-arch: .configure_stamp
+	HOME=/home/user $(MAKE)
+
+build-indep: .configure_stamp
+	$(MAKE) man-html
+
+.PHONY: override_dh_auto_test
+override_dh_auto_test:
+ifeq ($(OCAML_HAVE_OCAMLOPT),yes)
+	dh_auto_test
+endif
+
+.PHONY: override_dh_auto_clean
+override_dh_auto_clean:
+	$(MAKE) clean || true
+
+.PHONY: override_dh_installdocs
+override_dh_installdocs:
+	dh_installdocs -p opam --link-doc=opam-installer
+	dh_installdocs --remaining-packages
+
+.PHONY: override_dh_missing
+override_dh_missing:
+	dh_missing --fail-missing

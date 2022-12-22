@@ -1,0 +1,1 @@
+dir_to_symlink /usr/share/doc/opam /usr/share/doc/opam-installer 2.0.0-1~ opam

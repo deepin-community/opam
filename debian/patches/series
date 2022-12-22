@@ -1,0 +1,5 @@
+0001-Add-a-test-target.patch
+0002-opamFileTools.lint-Fix-typo-grammar-in-error-message.patch
+0003-opamCommands-Fix-typo-grammar-in-check.patch
+0004-Use-HOME-env-variable-instead-of.patch
+0005-Port-to-Dose3-6.0.1.patch
