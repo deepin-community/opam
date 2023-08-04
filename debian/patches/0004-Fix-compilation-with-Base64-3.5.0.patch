@@ -1,0 +1,47 @@
+From: Stephane Glondu <steph@glondu.net>
+Date: Mon, 14 Feb 2022 11:28:19 +0100
+Subject: Fix compilation with Base64 3.5.0
+
+---
+ src/client/dune                 | 2 +-
+ src/client/opamSwitchCommand.ml | 7 ++++++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/client/dune b/src/client/dune
+index 09151a8..7de0490 100644
+--- a/src/client/dune
++++ b/src/client/dune
+@@ -3,7 +3,7 @@
+   (public_name opam-client)
+   (synopsis    "OCaml Package Manager client and CLI library")
+   (modules     (:standard \ opamMain get_git_version))
+-  (libraries   opam-state opam-solver opam-repository re extlib cmdliner)
++  (libraries   opam-state opam-solver opam-repository re extlib cmdliner base64)
+   (flags       (:standard
+                (:include ../ocaml-flags-standard.sexp)
+                (:include ../ocaml-flags-configure.sexp)
+diff --git a/src/client/opamSwitchCommand.ml b/src/client/opamSwitchCommand.ml
+index 5e28167..90a3358 100644
+--- a/src/client/opamSwitchCommand.ml
++++ b/src/client/opamSwitchCommand.ml
+@@ -14,6 +14,11 @@ open OpamStateTypes
+ open OpamPackage.Set.Op
+ open OpamStd.Op
+ 
++let base64_decode_string ?pad ?alphabet input =
++  match Base64.decode ?pad ?alphabet input with
++  | Ok res -> res
++  | Error _ -> assert false
++
+ module S = OpamFile.SwitchSelections
+ 
+ let log fmt = OpamConsole.log "SWITCH" fmt
+@@ -400,7 +405,7 @@ let import_t ?ask importfile t =
+     OpamPath.Switch.extra_files_dir t.switch_global.root t.switch
+   in
+   OpamHash.Map.iter (fun hash content ->
+-      let value = Base64.decode_string content in
++      let value = base64_decode_string content in
+       let my = OpamHash.compute_from_string ~kind:(OpamHash.kind hash) value in
+       if OpamHash.contents my = OpamHash.contents hash then
+         let dst =

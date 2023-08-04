@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2018 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -210,3 +210,14 @@ module Job: sig
 end
 
 type 'a job = 'a Job.Op.job
+
+(**/**)
+val set_resolve_command :
+  (?env:string array -> ?dir:string -> string -> string option) -> unit
+
+(** Like Unix.create_process_env, but with correct escaping of arguments when
+    invoking a cygwin executable from a native Windows executable. *)
+val create_process_env :
+  string -> string array -> string array ->
+  Unix.file_descr -> Unix.file_descr -> Unix.file_descr ->
+  int

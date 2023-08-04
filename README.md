@@ -1,8 +1,8 @@
 # opam - A package manager for OCaml
 
-|2.0|
-|--|
-| [![GH  actions](https://github.com/ocaml/opam/workflows/Builds,%20tests%20&%20co/badge.svg?branch=2.0)](https://github.com/ocaml/opam/actions?query=workflow%3A%22Builds%2C+tests+%26+co%22+branch%3A2.0)  [![TravisCI 2.0 Build Status](https://travis-ci.org/ocaml/opam.svg?branch=2.0)](https://travis-ci.org/ocaml/opam)  [![AppVeyor 2.0 Build Status](https://ci.appveyor.com/api/projects/status/github/ocaml/opam?branch=2.0&svg=true)](https://ci.appveyor.com/project/AltGr/opam) |
+|master|2.0|
+|--|--|
+|[![GH actions](https://github.com/ocaml/opam/workflows/Builds,%20tests%20&%20co/badge.svg)](https://github.com/ocaml/opam/actions?query=workflow%3A%22Builds%2C+tests+%26+co%22+branch%3Amaster) [![AppVeyor Build Status](https://ci.appveyor.com/api/projects/status/github/ocaml/opam?branch=master&svg=true)](https://ci.appveyor.com/project/AltGr/opam) | [![2.0 GH actions](https://github.com/ocaml/opam/workflows/Builds,%20tests%20&%20co/badge.svg?branch=2.0)](https://github.com/ocaml/opam/actions?query=workflow%3A%22Builds%2C+tests+%26+co%22+branch%3A2.0) [![AppVeyor 2.0 Build Status](https://ci.appveyor.com/api/projects/status/github/ocaml/opam?branch=2.0&svg=true)](https://ci.appveyor.com/project/AltGr/opam) |
 
 Opam is a source-based package manager for OCaml. It supports multiple simultaneous
 compiler installations, flexible package constraints, and a Git-friendly development
@@ -42,7 +42,7 @@ it as a second step.
   `./configure` once done
 * Run `make libinstall` at the end
 
-_Note_: If you install on your system (without changeing the prefix), you will
+_Note_: If you install on your system (without changing the prefix), you will
 need to install as root (`sudo`). As sudo do not propagate environment
 variables, there wil be some errors. You can use `sudo -E "PATH=$PATH" in order
 to be sure to have the good environment for install.
@@ -217,7 +217,7 @@ the Dose library and Copyright 2011 Ralf Treinen.
 
 All other code is:
 
-Copyright 2012-2016 OCamlPro
+Copyright 2012-2020 OCamlPro
 Copyright 2012 INRIA
 
 All rights reserved. Opam is distributed under the terms of the GNU Lesser

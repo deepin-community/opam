@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2016 OCamlPro                                             *)
+(*    Copyright 2016-2020 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -31,12 +31,17 @@ type change =
 
 type t = change SM.t
 
-let string_of_change = function
-  | Added _ -> "addition"
+let string_of_change ?(full=false) =
+  let str s d =
+    if not full then s else
+      Printf.sprintf "%s %s" s (string_of_digest d)
+  in
+  function
+  | Added d -> str "addition" d
   | Removed -> "removal"
-  | Contents_changed _ -> "modifications"
-  | Perm_changed _ -> "permission change"
-  | Kind_changed _ -> "kind change"
+  | Contents_changed d -> str "modifications" d
+  | Perm_changed d -> str "permission change" d
+  | Kind_changed d -> str "kind change" d
 
 let to_string t =
   OpamStd.Format.itemize (fun (f, change) ->
@@ -85,6 +90,10 @@ let item_of_filename ?precise f : item =
   | Unix.S_CHR | Unix.S_BLK | Unix.S_FIFO | Unix.S_SOCK ->
     Special Unix.(stats.st_dev, stats.st_rdev)
 
+let item_of_filename_opt ?precise f =
+  try Some (item_of_filename ?precise f)
+  with Unix.Unix_error _ -> None
+
 let item_digest = function
   | _perms, File d -> "F:" ^ d
   | _perms, Dir -> "D"
@@ -94,9 +103,9 @@ let item_digest = function
 let is_precise_digest d =
   not (OpamStd.String.starts_with ~prefix:"F:S" d)
 
-let track dir ?(except=OpamFilename.Base.Set.empty) job_f =
+let track_t to_track ?(except=OpamFilename.Base.Set.empty) job_f =
   let module SM = OpamStd.String.Map in
-  let rec make_index acc prefix dir =
+  let rec make_index_topdir acc prefix dir =
     let files =
       try Sys.readdir (Filename.concat prefix dir)
       with Sys_error _ as e ->
@@ -113,21 +122,35 @@ let track dir ?(except=OpamFilename.Base.Set.empty) job_f =
            let item = item_of_filename f in
            let acc = SM.add rel item acc in
            match item with
-           | _, Dir -> make_index acc prefix rel
+           | _, Dir -> make_index_topdir acc prefix rel
            | _ -> acc
          with Unix.Unix_error _ as e ->
            log "Error at %s: %a" f (slog Printexc.to_string) e;
            acc)
       acc files
   in
-  let str_dir = OpamFilename.Dir.to_string dir in
+  let make_index =
+    match to_track with
+    | `Top dir ->
+      fun () -> make_index_topdir SM.empty (OpamFilename.Dir.to_string dir) ""
+    | `Paths (prefix, files) ->
+      fun () ->
+        List.fold_left (fun acc f ->
+            let prefix = OpamFilename.Dir.to_string prefix in
+            let rel = Filename.concat prefix f in
+            let item = item_of_filename_opt rel in
+            match item with
+            | None -> acc
+            | Some item -> SM.add f item acc)
+          SM.empty files
+  in
   let scan_timer = OpamConsole.timer () in
-  let before = make_index SM.empty str_dir "" in
+  let before = make_index () in
   log ~level:2 "before install: %a elements scanned in %.3fs"
     (slog @@ string_of_int @* SM.cardinal) before (scan_timer ());
   job_f () @@| fun result ->
   let scan_timer = OpamConsole.timer () in
-  let after = make_index SM.empty str_dir "" in
+  let after = make_index () in
   let diff =
     SM.merge (fun _ before after ->
         match before, after with
@@ -152,6 +175,12 @@ let track dir ?(except=OpamFilename.Base.Set.empty) job_f =
              SM.filter (fun _ -> function Added _ -> true | _ -> false))
     diff (scan_timer ());
   result, diff
+
+let track_files ~prefix files ?except job_f =
+  track_t (`Paths (prefix, files)) ?except job_f
+
+let track dir ?except job_f =
+  track_t (`Top dir) ?except job_f
 
 let check_digest file digest =
   let precise = is_precise_digest digest in
@@ -224,14 +253,72 @@ let revert ?title ?(verbose=OpamConsole.verbose()) ?(force=false)
   if already <> [] then
     log ~level:2 "%sfiles %s were already removed" title
       (String.concat ", " (List.rev already));
-  if modified <> [] && verbose then
-    OpamConsole.warning "%snot removing files that changed since:\n%s" title
-      (OpamStd.Format.itemize (fun s -> s) (List.rev modified));
+  if modified <> [] then
+    if OpamConsole.confirm ~default:false
+        "%sthese files have been modified since installation:\n%s\
+         Remove them anyway?" title
+        (OpamStd.Format.itemize (fun s -> s) (List.rev modified)) then
+      List.iter (fun f -> OpamFilename.remove (OpamFilename.Op.(prefix // f)))
+        modified;
   if nonempty <> [] && verbose then
     OpamConsole.note "%snot removing non-empty directories:\n%s" title
       (OpamStd.Format.itemize (fun s -> s) (List.rev nonempty));
   if cannot <> [] && verbose then
-    OpamConsole.warning "%scannot revert:\n%s" title
-      (OpamStd.Format.itemize
-         (fun (op,f) -> string_of_change op ^" of "^ f)
-         (List.rev cannot))
+    let cannot =
+      let rem, modf, perm =
+        List.fold_left (fun (rem, modf, perm as acc) (op,f) ->
+            match op with
+            | Removed -> (None, f)::rem, modf, perm
+            | Contents_changed dg ->
+              let precise = Some (is_precise_digest dg) in
+              rem, (precise, f)::modf, perm
+            | Perm_changed dg ->
+              let precise = Some (is_precise_digest dg) in
+              rem, modf, (precise, f)::perm
+            |  _ -> acc)
+          ([],[],[]) cannot
+      in
+      (if rem = [] then [] else [Removed, rem])
+      @ (if modf = [] then [] else [Contents_changed "_", modf])
+      @ (if perm = [] then [] else [Perm_changed "_", perm])
+    in
+    (OpamConsole.warning "%scannot revert:" title;
+     OpamConsole.errmsg "%s"
+       (OpamStd.Format.itemize
+          (fun (op,lf) ->
+             Printf.sprintf "%s of:\n%s"
+               (string_of_change op)
+               (OpamStd.Format.itemize (fun (pre,x) ->
+                    (OpamStd.Option.to_string (fun pr ->
+                         if pr then "[hash] " else "[tms] ") pre) ^ x) lf))
+          cannot))
+
+let update prefix t =
+  let removed = ref [] in
+  let prefix = OpamFilename.Dir.to_string prefix in
+  let update_digest file digest =
+    match
+      let filename = Filename.concat prefix file in
+      let precise = is_precise_digest digest in
+      item_digest ( item_of_filename ~precise filename )
+    with
+    | exception Unix.Unix_error ( ENOENT, _, _) ->
+      removed := file :: !removed;
+      digest
+    | exception _exn -> digest
+    | digest -> digest
+  in
+  let t =
+    SM.mapi (fun file change ->
+        match change with
+        | Added digest -> Added (update_digest file digest)
+        | Removed -> Removed
+        | Contents_changed digest ->
+          Contents_changed (update_digest file digest)
+        | Perm_changed digest -> Perm_changed (update_digest file digest)
+        | Kind_changed digest -> Kind_changed (update_digest file digest)
+      ) t
+  in
+  List.fold_left (fun t file ->
+      SM.remove file t
+    ) t !removed

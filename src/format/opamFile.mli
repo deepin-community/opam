@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -12,6 +12,7 @@
 (** Handles all OPAM file formats as record types and submodules, conversion to
     and from syntax *)
 
+open OpamParserTypes.FullPos
 open OpamTypes
 
 (** Functions to read and write OPAM configuration files in a typed way *)
@@ -31,6 +32,8 @@ module type IO_FILE = sig
 
   (** File contents *)
   type t
+
+  val format_version: OpamVersion.t
 
   (** Empty file *)
   val empty: t
@@ -55,6 +58,16 @@ module type IO_FILE = sig
 
   val write_to_string: ?filename:t typed_file -> t -> string
 
+end
+
+(* Error less [IO_FILE] read functions. *)
+module type BestEffortRead = sig
+  type t
+  val read: t typed_file -> t
+  val read_opt: t typed_file -> t option
+  val safe_read: t typed_file -> t
+  val read_from_channel: ?filename:t typed_file -> in_channel -> t
+  val read_from_string: ?filename:t typed_file -> string -> t
 end
 
 (** Lines of space-separated words. *)
@@ -88,6 +101,18 @@ module Wrappers: sig
   val pre_session: t -> command list
   val post_session: t -> command list
 
+  val with_pre_build: command list -> t -> t
+  val with_wrap_build: command list -> t -> t
+  val with_post_build: command list -> t -> t
+  val with_pre_install: command list -> t -> t
+  val with_wrap_install: command list -> t -> t
+  val with_post_install: command list -> t -> t
+  val with_pre_remove: command list -> t -> t
+  val with_wrap_remove: command list -> t -> t
+  val with_post_remove: command list -> t -> t
+  val with_pre_session: command list -> t -> t
+  val with_post_session: command list -> t -> t
+
   val empty : t
 
   val add: outer:t -> inner:t -> t
@@ -97,6 +122,9 @@ end
 module Config: sig
 
   include IO_FILE
+
+  (** Current root version *)
+  val root_version: opam_version
 
   (** OCaml switch updates *)
   val with_switch: switch -> t -> t
@@ -109,14 +137,17 @@ module Config: sig
 
   (** Update opam-version *)
   val with_opam_version: OpamVersion.t -> t -> t
+  val with_opam_root_version: OpamVersion.t -> t -> t
 
   val with_criteria: (solver_criteria * string) list -> t -> t
   val with_best_effort_prefix: string -> t -> t
+  val with_best_effort_prefix_opt: string option-> t -> t
 
   val with_solver: arg list -> t -> t
   val with_solver_opt: arg list option -> t -> t
 
   val with_jobs: int -> t -> t
+  val with_jobs_opt: int option -> t -> t
   val with_dl_tool: arg list -> t -> t
   val with_dl_tool_opt: arg list option -> t -> t
   val with_dl_jobs: int -> t -> t
@@ -131,9 +162,22 @@ module Config: sig
     arg list option -> t -> t
   val with_default_compiler:
     formula -> t -> t
+  val with_default_invariant:
+    formula -> t -> t
+  val with_depext: bool -> t -> t
+  val with_depext_run_installs: bool -> t -> t
+  val with_depext_cannot_install: bool -> t -> t
+  val with_depext_bypass: OpamSysPkg.Set.t -> t -> t
 
-  (** Return the OPAM version *)
+  (** Return the opam version *)
   val opam_version: t  -> opam_version
+
+  (** Return the opam root version, if not defined returns the default version
+      value [2.1~~previous] *)
+  val opam_root_version: t -> opam_version
+
+  (** Return the opam root version if defined *)
+  val opam_root_version_opt: t -> opam_version option
 
   (** Return the list of repository *)
   val repositories: t  -> repository_name list
@@ -143,8 +187,8 @@ module Config: sig
 
   val installed_switches: t -> switch list
 
-  (** Return the number of jobs *)
-  val jobs: t -> int
+  (** Return the number of jobs defined *)
+  val jobs: t -> int option
 
   val dl_tool: t -> arg list option
 
@@ -170,7 +214,23 @@ module Config: sig
   val validation_hook: t -> arg list option
 
   val default_compiler: t -> formula
+  val default_invariant: t -> formula
 
+  val depext: t -> bool
+  val depext_run_installs: t -> bool
+  val depext_cannot_install: t -> bool
+  val depext_bypass: t -> OpamSysPkg.Set.t
+
+  val fields: (string * (t, value) OpamPp.field_parser) list
+
+  (** All file fields as print-AST, Fields within sections are
+      accessed through dot-separated paths *)
+  val to_list: ?filename:'a typed_file -> t -> (string * value) list
+
+  module BestEffort: BestEffortRead with type t := t
+
+  (** Raw read the config file to extract [opam-root-version] field value. *)
+  val raw_root_version: 'a typed_file -> OpamVersion.t option
 end
 
 (** Init config file [/etc/opamrc] *)
@@ -180,6 +240,7 @@ module InitConfig: sig
   val opam_version: t -> opam_version
   val repositories: t -> (repository_name * (url * trust_anchors option)) list
   val default_compiler: t -> formula
+  val default_invariant: t -> formula
   val jobs: t -> int option
   val dl_tool: t -> arg list option
   val dl_jobs: t -> int option
@@ -197,6 +258,7 @@ module InitConfig: sig
   val with_repositories:
     (repository_name * (url * trust_anchors option)) list -> t -> t
   val with_default_compiler: formula -> t -> t
+  val with_default_invariant: formula -> t -> t
   val with_jobs: int option -> t -> t
   val with_dl_tool: arg list option -> t -> t
   val with_dl_jobs: int option -> t -> t
@@ -241,7 +303,9 @@ module URL: sig
 
   include IO_FILE
 
-  val create: ?mirrors:url list -> ?checksum:OpamHash.t list -> url -> t
+  val create:
+    ?mirrors:url list -> ?checksum:OpamHash.t list -> ?subpath:string ->
+    url -> t
 
   (** URL address *)
   val url: t -> url
@@ -252,7 +316,12 @@ module URL: sig
   val checksum: t -> OpamHash.t list
 
   (** Constructor *)
+  val with_url: url -> t -> t
   val with_checksum: OpamHash.t list -> t -> t
+  val with_subpath: string -> t -> t
+  val with_subpath_opt: string option -> t -> t
+
+  val subpath: t -> string option
 
 end
 
@@ -291,7 +360,7 @@ module OPAM: sig
     (* User-facing data used by opam *)
     messages   : (string * filter option) list;
     post_messages: (string * filter option) list;
-    depexts    : (string list * filter) list;
+    depexts    : (OpamSysPkg.Set.t * filter) list;
     libraries  : (string * filter option) list;
     syntax     : (string * filter option) list;
     dev_repo   : url option;
@@ -307,15 +376,17 @@ module OPAM: sig
     bug_reports: string list;
 
     (* Extension fields (x-foo: "bar") *)
-    extensions : (pos * value) OpamStd.String.Map.t;
+    extensions : value OpamStd.String.Map.t;
 
     (* Extra sections *)
     url        : URL.t option;
     descr      : Descr.t option;
 
     (* Related metadata directory (not an actual field of the file)
-       This can be used to locate e.g. the files/ overlays *)
-    metadata_dir: dirname option;
+       This can be used to locate e.g. the files/ overlays.
+       If the repository is specified, the string is a relative path from its
+       root. It should otherwise be an absolute path. *)
+    metadata_dir: (repository_name option * string) option;
 
     (* Names and hashes of the files below files/ *)
     extra_files: (OpamFilename.Base.t * OpamHash.t) list option;
@@ -394,7 +465,7 @@ module OPAM: sig
   val depopts: t -> filtered_formula
 
   (** External dependencies *)
-  val depexts: t -> (string list * filter) list
+  val depexts: t -> (OpamSysPkg.Set.t * filter) list
 
   val extra_sources: t -> (basename * URL.t) list
 
@@ -477,17 +548,25 @@ module OPAM: sig
 
   val get_url: t -> url option
 
-  (** Related metadata directory (not an actual field of the file, linked to the
-      file location).
+  (** Related metadata directory (either repository name + relative path, or
+      absolute path; not an actual field of the file, linked to the file
+      location).
       This can be used to locate e.g. the files/ overlays *)
-  val metadata_dir: t -> dirname option
+  val metadata_dir: t -> (repository_name option * string) option
+
+  (** Gets the resolved metadata dir, given a mapping of repository names to
+      their roots *)
+  val get_metadata_dir:
+    repos_roots:(repository_name -> dirname) -> t -> dirname option
 
   (** Names and hashes of the files below files/ *)
   val extra_files: t -> (OpamFilename.Base.t * OpamHash.t) list option
 
   (** Looks up the extra files, and returns their full paths, relative path to
       the package source, and hash. Doesn't check the hashes. *)
-  val get_extra_files: t -> (filename * basename * OpamHash.t) list
+  val get_extra_files:
+    repos_roots:(repository_name -> dirname) ->
+    t -> (filename * basename * OpamHash.t) list
 
   (** Returns the errors that were found when parsing the file, associated to
       their fields (that were consequently ignored) *)
@@ -560,7 +639,7 @@ module OPAM: sig
   val with_bug_reports: string list -> t -> t
 
   (** Construct using [depexts] *)
-  val with_depexts: (string list * filter) list -> t -> t
+  val with_depexts: (OpamSysPkg.Set.t * filter) list -> t -> t
 
   val with_flags: package_flag list -> t -> t
 
@@ -582,6 +661,8 @@ module OPAM: sig
 
   val add_extension: t -> string -> value -> t
 
+  val remove_extension: t -> string -> t
+
   val with_deprecated_build_doc: command list -> t -> t
 
   val with_deprecated_build_test: command list -> t -> t
@@ -597,7 +678,7 @@ module OPAM: sig
   val with_url: URL.t -> t -> t
   val with_url_opt: URL.t option -> t -> t
 
-  val with_metadata_dir: dirname option -> t -> t
+  val with_metadata_dir: (repository_name option * string) option -> t -> t
 
   val with_extra_files: (OpamFilename.Base.t * OpamHash.t) list -> t -> t
   val with_extra_files_opt: (OpamFilename.Base.t * OpamHash.t) list option -> t -> t
@@ -662,6 +743,7 @@ end
 module SwitchSelections: sig
   type t = switch_selections
   include IO_FILE with type t := t
+  module BestEffort: BestEffortRead with type t := t
 end
 
 (** An extended version of SwitchSelections that can include full opam files as
@@ -669,6 +751,7 @@ end
 module SwitchExport: sig
   type t = {
     selections: switch_selections;
+    extra_files: string OpamHash.Map.t;
     overlays: OPAM.t OpamPackage.Name.Map.t;
   }
   include IO_FILE with type t := t
@@ -856,9 +939,11 @@ module Repo_config_legacy : sig
   include IO_FILE with type t := t
 end
 
-
-module Repos_config: IO_FILE
-  with type t = (url * trust_anchors option) option OpamRepositoryName.Map.t
+module Repos_config: sig
+  type t = (url * trust_anchors option) option OpamRepositoryName.Map.t
+  include IO_FILE with type t := t
+  module BestEffort: BestEffortRead with type t := t
+end
 
 module Switch_config: sig
   type t = {
@@ -870,11 +955,20 @@ module Switch_config: sig
     opam_root: dirname option;
     wrappers: Wrappers.t;
     env: env_update list;
+    invariant: OpamFormula.t option;
+    depext_bypass: OpamSysPkg.Set.t;
   }
+  val file_format_version: OpamVersion.t
   val variable: t -> variable -> variable_contents option
   val path: t -> std_path -> string option
   val wrappers: t -> Wrappers.t
+  val sections: (string * (t, (string option * opamfile_item list) list) OpamPp.field_parser) list
+  val fields: (string * (t, value) OpamPp.field_parser) list
+  val to_list: ?filename:'a typed_file -> t -> (string * value) list
   include IO_FILE with type t := t
+  val oldest_compatible_format_version: OpamVersion.t
+
+  module BestEffort: BestEffortRead with type t := t
 end
 
 (** Pinned package files (only used for migration from 1.2, the inclusive State
@@ -977,6 +1071,7 @@ end
 
 module type SyntaxFileArg = sig
   val internal: string
+  val format_version: OpamVersion.t
   type t
   val empty: t
   val pp: (opamfile, filename * t) OpamPp.t

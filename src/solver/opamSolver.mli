@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -48,14 +48,24 @@ val print_solution:
   requested:name_set -> reinstall:package_set ->
   solution -> unit
 
+(** Serialize a solution *)
+val solution_to_json : solution OpamJson.encoder
+val solution_of_json : solution OpamJson.decoder
+
 (** Computes an opam->cudf version map from a set of package *)
 val cudf_versions_map: universe -> package_set -> int OpamPackage.Map.t
 
 (** Creates a CUDF universe from an OPAM universe, including the given packages.
-    Evaluation of the first 3 arguments is staged. Warning: when [depopts] is
-    [true], the optional dependencies may become strong dependencies. *)
+    Evaluation of the first 4 arguments is staged. Warning: when [depopts] is
+    [true], the optional dependencies may become strong dependencies.
+
+    Use [add_invariant] if you expect to call the solver and need the switch
+    invariants to be respected; remember in that case to call
+    [Cudf.remove_package universe OpamCudf.opam_invariant_package]
+    before exporting the results *)
 val load_cudf_universe:
-  universe -> ?version_map:int package_map -> package_set ->
+  universe -> ?version_map:int package_map -> ?add_invariant:bool ->
+  package_set ->
   ?depopts:bool -> build:bool -> post:bool -> unit ->
   Cudf.universe
 
@@ -82,7 +92,7 @@ val installable: universe -> package_set
 (** Like [installable], but within a subset and potentially much faster *)
 val installable_subset: universe -> package_set -> package_set
 
-(** Return the topological sort of the transitive dependency closures
+(** Return the transitive dependency closures
     of a collection of packages.*)
 val dependencies :
   depopts:bool -> build:bool -> post:bool ->
@@ -90,7 +100,7 @@ val dependencies :
   ?unavailable:bool ->
   universe ->
   package_set ->
-  package list
+  package_set
 
 (** Same as [dependencies] but for reverse dependencies *)
 val reverse_dependencies :
@@ -99,7 +109,23 @@ val reverse_dependencies :
   ?unavailable:bool ->
   universe ->
   package_set ->
+  package_set
+
+(** Sorts the given package set in topological order (as much as possible,
+    beware of cycles in particular if [post] is [true]) *)
+val dependency_sort :
+  depopts:bool -> build:bool -> post:bool ->
+  universe ->
+  package_set ->
   package list
+
+module PkgGraph: Graph.Sig.I
+  with type V.t = OpamPackage.t
+val dependency_graph :
+  depopts:bool -> build:bool -> post:bool ->
+  installed:bool ->
+  ?unavailable:bool ->
+  universe -> PkgGraph.t
 
 (** Check the current set of installed packages in a universe for
     inconsistencies *)
@@ -112,6 +138,12 @@ val coinstallability_check : universe -> package_set -> OpamCudf.conflict option
 (** Checks if the given atoms can be honored at the same time in the given
     universe *)
 val atom_coinstallability_check : universe -> atom list -> bool
+
+(** [coinstallable_subset univ set packages] returns the subset of [packages]
+    which are individually co-installable with [set], i.e. that can be installed
+    if [set] while [set] remains installed. This returns the empty set if [set]
+    is already not coinstallable. *)
+val coinstallable_subset : universe -> package_set -> package_set -> package_set
 
 (** Dumps a cudf file containing all available packages in the given universe,
     plus version bindings (as '#v2v' comments) for the other ones. *)

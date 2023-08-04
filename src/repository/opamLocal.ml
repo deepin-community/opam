@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -15,7 +15,14 @@ open OpamProcess.Job.Op
 
 let log fmt = OpamConsole.log "RSYNC" fmt
 
-let rsync_arg = "-rLptgoDrvc"
+(* Rsync args recap:
+  - recurse into directories (r)
+  - skip based on checksum, not mod-time & size (c)
+  - preserve permissions (p), times (t), group (g), owner (o),
+    device & special files (D)
+  - transform symlink into referent file/dir (L)
+  *)
+let rsync_arg = "-rLptgoDvc"
 
 (* if rsync -arv return 4 lines, this means that no files have changed *)
 let rsync_trim = function
@@ -24,6 +31,9 @@ let rsync_trim = function
     match List.rev t with
     | _ :: _ :: _ :: l -> List.filter ((<>) "./") l
     | _ -> []
+
+let convert_path =
+  OpamSystem.get_cygpath_function ~command:"rsync"
 
 let call_rsync check args =
   OpamSystem.make_command "rsync" args
@@ -52,22 +62,20 @@ let rsync ?(args=[]) ?(exclude_vcdirs=true) src dst =
   let overlap src dst =
     let norm d = Filename.concat d "" in
     OpamStd.String.starts_with ~prefix:(norm src) (norm dst) &&
-    not (OpamStd.String.starts_with
-           ~prefix:(norm (Filename.concat src OpamSwitch.external_dirname))
-           (norm dst)) ||
+    not (OpamStd.String.contains ~sub:OpamSwitch.external_dirname (norm dst)) ||
     OpamStd.String.starts_with ~prefix:(norm dst) (norm src)
   in
+  (* See also [OpamVCS.sync_dirty] *)
   let exclude_args =
-    if exclude_vcdirs then [
-      "--exclude"; ".git";
-      "--exclude"; "_darcs";
-      "--exclude"; ".hg";
+    (if not exclude_vcdirs then [] else
+       [ "--exclude"; ".git";
+         "--exclude"; "_darcs";
+         "--exclude"; ".hg";
+       ])
+    @ [
       "--exclude"; ".#*";
       "--exclude"; OpamSwitch.external_dirname ^ "*";
-    ]
-    else [
-      "--exclude"; ".#*";
-      "--exclude"; OpamSwitch.external_dirname ^ "*";
+      "--exclude"; "_build";
     ]
   in
   if not(remote || Sys.file_exists src) then
@@ -79,9 +87,10 @@ let rsync ?(args=[]) ?(exclude_vcdirs=true) src dst =
      Done (Not_available (None, src)))
   else (
     OpamSystem.mkdir dst;
+    let convert_path = Lazy.force convert_path in
     call_rsync (fun () -> not (OpamSystem.dir_is_empty dst))
       ( rsync_arg :: args @ exclude_args @
-        [ "--delete"; "--delete-excluded"; src; dst; ])
+        [ "--delete"; "--delete-excluded"; convert_path src; convert_path dst; ])
     @@| function
     | None -> Not_available (None, src)
     | Some [] -> Up_to_date []
@@ -115,8 +124,9 @@ let rsync_file ?(args=[]) url dst =
     Done (Up_to_date dst)
   else
     (OpamFilename.mkdir (OpamFilename.dirname dst);
+     let convert_path = Lazy.force convert_path in
      call_rsync (fun () -> Sys.file_exists dst_s)
-       ( rsync_arg :: args @ [ src_s; dst_s ])
+       ( rsync_arg :: args @ [ convert_path src_s; convert_path dst_s ])
      @@| function
      | None -> Not_available (None, src_s)
      | Some [] -> Up_to_date dst
@@ -181,9 +191,17 @@ module B = struct
 
   let repo_update_complete _ _ = Done ()
 
-  let pull_url ?cache_dir:_ local_dirname _checksum remote_url =
+  let pull_url ?cache_dir:_ ?subpath local_dirname _checksum remote_url =
+    let local_dirname =
+      OpamStd.Option.map_default (fun x -> OpamFilename.Op.(local_dirname / x))
+        local_dirname subpath
+    in
     OpamFilename.mkdir local_dirname;
     let dir = OpamFilename.Dir.to_string local_dirname in
+    let remote_url =
+      OpamStd.Option.map_default (fun x -> OpamUrl.Op.(remote_url / x))
+        remote_url subpath
+    in
     let remote_url =
       match OpamUrl.local_dir remote_url with
       | Some _ ->
@@ -219,6 +237,9 @@ module B = struct
   let revision _ =
     Done None
 
-  let sync_dirty dir url = pull_url dir None url
+  let sync_dirty ?subpath dir url = pull_url ?subpath dir None url
+
+  let get_remote_url ?hash:_ _ =
+    Done None
 
 end

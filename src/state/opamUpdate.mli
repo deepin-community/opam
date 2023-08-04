@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -72,10 +72,15 @@ val pinned_package:
 (** Download or synchronise the upstream source for the given package into the
     given directory. Also places all of the package extra files (that have a
     known hash) into the cache. For non-VC remotes, verifies the checksum if
-    any *)
+    any.
+
+    Stops on first error. The extra downloads list is reverted, so that the
+    error is always first if any.
+
+    Does not print the results as it used to. *)
 val download_package_source:
   'a switch_state -> package -> dirname ->
-  unit download option OpamProcess.job
+  (string download option * (string * string download) list) OpamProcess.job
 
 (** [cleanup_source old_opam_option new_opam] checks if the remote URL has
     changed between [old_opam_option] and [new_opam], and, depending on that,
@@ -86,5 +91,5 @@ val cleanup_source:
 
 (** Low-level function to retrieve the package source into its local cache *)
 val fetch_dev_package:
-  OpamFile.URL.t -> dirname -> ?working_dir:bool -> package ->
+  OpamFile.URL.t -> dirname -> ?working_dir:bool -> ?subpath:string -> package ->
   unit download OpamProcess.job

@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -12,7 +12,7 @@
 (** Small lib for writing opam-repo admin scripts *)
 
 (** The current repo (taken from CWD!) *)
-val repo : OpamTypes.repository
+val repo : OpamTypes.dirname
 
 (** All defined packages in the current repo *)
 val packages : OpamPackage.Set.t

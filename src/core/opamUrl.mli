@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -17,8 +17,10 @@ type backend = [ `http | `rsync | version_control ]
 
 val string_of_backend: backend -> string
 
+exception Parse_error of string
+
 (** Tolerates lots of backward compatibility names;
-    @raise Failure on unknown protocol *)
+    @raise Parse_error on unknown protocol *)
 val backend_of_string: string -> [> backend]
 
 type t = {
@@ -34,8 +36,17 @@ type t = {
     otherwise guess version control from the suffix by default (for e.g.
     https://foo/bar.git). (this should be disabled when parsing from files).
     Note that [handle_suffix] also handles user-name in ssh addresses (e.g.
-    "ssh://git@github.com/...") *)
-val parse: ?backend:backend -> ?handle_suffix:bool -> string -> t
+    "ssh://git@github.com/..."). If [from_file] is set to false, it resolves
+    rsync/file relative path.
+    @raise Parse_error *)
+val parse:
+  ?backend:backend -> ?handle_suffix:bool -> ?from_file:bool -> string -> t
+
+(** Same as [parse], but catch [Parse_error]. In this case, display a warning
+    if [quiet] is not set to true. *)
+val parse_opt:
+  ?quiet:bool -> ?backend:backend -> ?handle_suffix:bool -> ?from_file:bool
+  -> string -> t option
 
 include OpamStd.ABSTRACT with type t := t
 
@@ -65,6 +76,10 @@ val local_file: t -> OpamFilename.t option
 (** If the given url-string has no 'transport://' specification and corresponds
     to an existing local path, check for version-control clues at that path *)
 val guess_version_control: string -> [> version_control ] option
+
+(** [map_file_url f url] applies [f] to the [path] portion of [url] if
+    [transport] is ["file"]. *)
+val map_file_url : (string -> string) -> t -> t
 
 module Op: sig
 

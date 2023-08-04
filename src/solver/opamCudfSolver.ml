@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2017 OCamlPro                                             *)
+(*    Copyright 2017-2019 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -52,7 +52,7 @@ let call_external_solver command ~criteria ?timeout (_, universe,_ as cudf) =
           command
       in
       OpamSystem.command
-        ~verbose:(OpamCoreConfig.(!r.debug_level >= 2))
+        ~verbose:(OpamCoreConfig.(abs !r.debug_level >= 2))
         cmd
     in
     OpamFilename.remove solver_in;
@@ -125,16 +125,23 @@ module Aspcud_def = struct
   let default_criteria =
     {
       crit_default = "-count(removed),\
+                      -sum(solution,avoid-version),\
                       -sum(request,version-lag),\
                       -count(down),\
                       -sum(solution,version-lag),\
-                      -count(changed)";
+                      -count(changed),\
+                      -sum(solution,missing-depexts)";
       crit_upgrade = "-count(down),\
                       -count(removed),\
+                      -sum(solution,avoid-version),\
                       -sum(solution,version-lag),\
+                      -sum(solution,missing-depexts),\
                       -count(new)";
       crit_fixup = "-count(changed),\
-                    -notuptodate(solution),-sum(solution,version-lag)";
+                    -count[avoid-version:,true],\
+                    -notuptodate(solution),\
+                    -sum(solution,version-lag),\
+                    -count[missing-depexts:,true]";
       crit_best_effort_prefix = Some "+sum(solution,opam-query),";
     }
 end
@@ -170,14 +177,21 @@ module Mccs_def = struct
 
   let default_criteria =  {
     crit_default = "-removed,\
+                    -count[avoid-version:,true],\
                     -count[version-lag:,true],\
                     -changed,\
                     -count[version-lag:,false],\
+                    -count[missing-depexts:,true],\
                     -new";
     crit_upgrade = "-removed,\
+                    -count[avoid-version:,true],\
                     -count[version-lag:,false],\
+                    -count[missing-depexts:,true],\
                     -new";
-    crit_fixup = "-changed,-count[version-lag:,false]";
+    crit_fixup = "-changed,\
+                  -count[avoid-version:,true],\
+                  -count[version-lag:,false],\
+                  -count[missing-depexts:,true]";
     crit_best_effort_prefix = Some "+count[opam-query:,false],";
   }
 end
@@ -215,6 +229,8 @@ let make_custom_solver name args criteria =
 
 let default_solver_selection =
   OpamBuiltinMccs.all_backends @ [
+    (module OpamBuiltinZ3: S);
+    (module OpamBuiltin0install: S);
     (module Aspcud: S);
     (module Mccs: S);
     (module Aspcud_old: S);

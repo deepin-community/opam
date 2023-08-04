@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -21,6 +21,9 @@ type t = dirname
 (** State cache *)
 val state_cache: t -> filename
 
+(** Directory containing state cache *)
+val state_cache_dir: t -> dirname
+
 (** Global lock file for the whole opamroot. Opam should generally read-lock
     this (e.g. initialisation and format upgrades require a write lock) *)
 val lock: t -> filename
@@ -35,12 +38,6 @@ val init_config_files: unit -> OpamFile.InitConfig.t OpamFile.t list
 (** Lock for updates on the main config file (write lock when changes to
     switches, repositories lists are expected. No lock needed otherwise) *)
 val config_lock: t -> filename
-
-(** Archives dir *)
-val archives_dir: t -> dirname
-
-(** Archive file: {i $opam/archives/$NAME.$VERSION+opam.tar.gz} *)
-val archive: t -> package -> filename
 
 (** Global lock file for the repositories mirrors: {i $opam/repo/lock} *)
 val repos_lock: t -> filename
@@ -64,6 +61,9 @@ val backup_dir: t -> dirname
 (** Backup file for state export *)
 val backup: t -> switch_selections OpamFile.t
 
+(** The prefix for plugin commands (["opam-"]) *)
+val plugin_prefix : string
+
 (** The directory for plugins data {i $opam/plugins} *)
 val plugins: t -> dirname
 
@@ -77,6 +77,12 @@ val plugin_bin: t -> name -> filename
 (** The directory for a given plugin's data {i $opam/plugins/$name}. ["bin"] is
     forbidden. *)
 val plugin: t -> name -> dirname
+
+module type LAYOUT = sig
+  type ctx
+  val root : dirname -> ctx -> dirname
+  val lib_dir : dirname -> ctx -> dirname
+end
 
 (** Switch related paths *)
 module Switch: sig
@@ -153,6 +159,14 @@ module Switch: sig
       $meta/sources/$name.$version/} *)
   val sources: t -> switch -> package -> dirname
 
+  (** Temporary switch-local directory where a by-hash map of extra files may be stored.
+      This is used for switch-imports: {i $meta/extra-files-cache} *)
+  val extra_files_dir: t -> switch -> dirname
+
+  (** Extra file with the given hash from the temporary switch-import cache:
+      {i $meta/extra-files-cache/HASH} *)
+  val extra_file: t -> switch -> OpamHash.t -> filename
+
   (** Mirror of the sources for a given pinned package: {i
       $meta/sources/$name/} (without version) *)
   val pinned_package: t -> switch -> name -> dirname
@@ -166,6 +180,10 @@ module Switch: sig
   (** Directory where the metadata of installed packages is mirrored.
       {i $meta/packages/} *)
   val installed_opams: t -> switch -> dirname
+
+  (** Cache file for the mirrored installed package metadata
+      {i $meta/packages/cache} *)
+  val installed_opams_cache: t -> switch -> filename
 
   (** The mirror of the package definition for the given installed package {i
       $meta/packages/$name.$version/} *)
@@ -228,6 +246,37 @@ module Switch: sig
     (** Installed system binaries: {i $prefix/sbin} *)
     val sbin: t -> switch -> dirname
   end
+
+  (** Fuctorised version of Default, for replicating
+      a switch's layout in non-switch contexts *)
+  module DefaultF : functor (L:LAYOUT) -> sig
+    val lib: t -> L.ctx -> name -> dirname
+  
+    val lib_dir: t -> L.ctx -> dirname
+  
+    val stublibs: t -> L.ctx -> dirname
+  
+    val toplevel: t -> L.ctx -> dirname
+  
+    val doc: t -> L.ctx -> name -> dirname
+  
+    val doc_dir: t -> L.ctx -> dirname
+  
+    val share_dir: t -> L.ctx -> dirname
+  
+    val share: t -> L.ctx -> name -> dirname
+  
+    val etc_dir: t -> L.ctx -> dirname
+  
+    val etc: t -> L.ctx -> name -> dirname
+  
+    val man_dir: ?num:string -> t -> L.ctx -> dirname
+  
+    val bin: t -> L.ctx -> dirname
+  
+    val sbin: t -> L.ctx -> dirname
+  end
+  
 
   (** Actual config handling the global-config.config indirections *)
 

@@ -1,7 +1,7 @@
 -include ../Makefile.config
 
 ifeq ($(DUNE),)
-  DUNE_EXE = ../src_ext/dune-local/_build_bootstrap/install/default/bin/dune$(EXE)
+  DUNE_EXE = ../src_ext/dune-local/_boot/install/default/bin/dune$(EXE)
   ifeq ($(shell command -v cygpath 2>/dev/null),)
     DUNE := $(DUNE_EXE)
   else
@@ -14,17 +14,11 @@ endif
 DUNE_PROFILE ?= release
 DUNE_ARGS ?= 
 
-ifndef OPAM
-  OPAM = $(DUNE) exec --profile=$(DUNE_PROFILE) -- opam
-endif
-
-TOPICS  = $(shell $(OPAM) help topics)
-TOPICS_ADMIN = cache filter index lint list upgrade
-
-HELPFMT = --help=groff
-
-ifndef OPAM_INSTALLER
-  OPAM_INSTALLER = $(DUNE) exec --profile=$(DUNE_PROFILE) -- opam-installer
+ifeq ($(DUNE_PROFILE_ARG),release)
+  # TODO Replace with --release when we require dune >= 2.5
+  DUNE_PROFILE_ARG = --profile=release
+else
+  DUNE_PROFILE_ARG = --profile=$(DUNE_PROFILE)
 endif
 
 .PHONY: man html pages
@@ -51,7 +45,7 @@ man-html:
 
 html:
 	rm -rf html
-	cd .. && $(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) @doc
+	cd .. && $(DUNE) build $(DUNE_PROFILE_ARG) --root . $(DUNE_ARGS) @doc
 	cp -r ../_build/default/_doc/_html html
 	sed 's/%{OPAMVERSION}%/'$(version)'/g' index.html > html/index.html
 # Not to break older links, add manpages to the `ocamldoc` dir

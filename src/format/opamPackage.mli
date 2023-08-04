@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -21,6 +21,9 @@ module Version: sig
 
   (** Compare two versions using the Debian version scheme *)
   val compare: t -> t -> int
+
+  (** Are two package versions equal? *)
+  val equal: t -> t -> bool
 end
 
 (** Names *)
@@ -30,6 +33,8 @@ module Name: sig
   (** Compare two package names *)
   val compare: t -> t -> int
 
+  (** Are two package names equal? *)
+  val equal: t -> t -> bool
 end
 
 type t = private {
@@ -93,6 +98,7 @@ val has_name: Set.t -> Name.t -> bool
 
 (** Return all the packages with the given name *)
 val packages_of_name: Set.t -> Name.t -> Set.t
+val packages_of_name_map: 'a Map.t -> Name.t -> 'a Map.t
 
 (** Return a package with the given name *)
 val package_of_name: Set.t -> Name.t -> t

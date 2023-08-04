@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2016 OCamlPro                                             *)
+(*    Copyright 2016-2019 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -80,6 +80,9 @@ let to_string (kind,s) =
   String.concat pfx_sep_str [string_of_kind kind; s]
 
 let to_json s = `String (to_string s)
+let of_json = function
+| `String s -> of_string_opt s
+| _ -> None
 
 let to_path (kind,s) =
   [string_of_kind kind; String.sub s 0 2; s]
@@ -101,7 +104,7 @@ let compute ?(kind=default_kind) file = match kind with
         | _ ->
           log "openssl error, use internal sha library";
           OpamSHA.hash kind file
-      with OpamSystem.Command_not_found _ | OpamSystem.Process_error _ ->
+      with OpamSystem.Command_not_found _ | OpamSystem.Process_error _ | OpamSystem.Permission_denied _ ->
         log "openssl not found, use internal sha library";
         OpamSHA.hash kind file
     in
@@ -123,6 +126,7 @@ module O = struct
   type t = _t
   let to_string = to_string
   let to_json = to_json
+  let of_json = of_json
   let compare = compare
 end
 

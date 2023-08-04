@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -11,7 +11,9 @@
 
 open OpamFilename.Op
 
-let create root name = root / "repo" / OpamRepositoryName.to_string name
+let root root name = root / "repo" / OpamRepositoryName.to_string name
+
+let tar root name = root / "repo" // (OpamRepositoryName.to_string name ^ ".tar.gz")
 
 let download_cache root = root / "download-cache"
 
@@ -24,9 +26,11 @@ let pin_cache_dir =
 
 let pin_cache u =
   pin_cache_dir () /
-  (OpamHash.contents @@
-   OpamHash.compute_from_string ~kind:`SHA512 @@
-   OpamUrl.to_string u)
+  String.sub
+    (OpamHash.contents @@
+     OpamHash.compute_from_string ~kind:`SHA512 @@
+     OpamUrl.to_string u)
+    0 16
 
 let repo repo_root = repo_root // "repo" |> OpamFile.make
 

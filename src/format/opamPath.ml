@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -25,15 +25,18 @@ let init_config_files () =
     OpamFilename.Dir.of_string (OpamStd.Sys.home ()) // ".opamrc";
   ]
 
-let state_cache t = t / "repo" // "state.cache"
+let state_cache_dir t = t / "repo"
+
+let state_cache t = state_cache_dir t // Printf.sprintf "state-%s.cache" (OpamVersion.magic ())
 
 let lock t = t // "lock"
 
 let config_lock t = t // "config.lock"
 
+(*
 let archives_dir t = t / "archives"
-
 let archive t nv = archives_dir t // (OpamPackage.to_string nv ^ "+opam.tar.gz")
+*)
 
 let repos_lock t = t / "repo" // "lock"
 
@@ -57,15 +60,17 @@ let backup_dir t = t / "backup"
 
 let backup t = backup_dir t /- backup_file ()
 
+let plugin_prefix = "opam-"
+
 let plugins t = t / "plugins"
 
 let plugins_bin t = plugins t / "bin"
 
 let plugin_bin t name =
-  let sname = OpamPackage.Name.to_string name in
+  let sname = OpamPackage.Name.to_string name ^ OpamStd.Sys.executable_name "" in
   let basename =
-    if OpamStd.String.starts_with ~prefix:"opam-" sname then sname
-    else "opam-" ^ sname
+    if OpamStd.String.starts_with ~prefix:plugin_prefix sname then sname
+    else plugin_prefix ^ sname
   in
   plugins_bin t // basename
 
@@ -73,6 +78,12 @@ let plugin t name =
   let sname = OpamPackage.Name.to_string name in
   assert (sname <> "bin");
   plugins t / sname
+
+module type LAYOUT = sig
+  type ctx
+  val root : dirname -> ctx -> dirname
+  val lib_dir : dirname -> ctx -> dirname
+end
 
 module Switch = struct
 
@@ -117,6 +128,10 @@ module Switch = struct
 
   let sources_dir t a = meta t a / "sources"
 
+  let extra_files_dir t a = meta t a / "extra-files-cache"
+
+  let extra_file t a h = extra_files_dir t a // OpamHash.contents h
+
   let sources t a nv = sources_dir t a / OpamPackage.to_string nv
 
   let pinned_package t a name = sources_dir t a / OpamPackage.Name.to_string name
@@ -129,6 +144,8 @@ module Switch = struct
 
   let installed_opams t a = meta t a / "packages"
 
+  let installed_opams_cache t a = meta t a / "packages" // "cache"
+
   let installed_package_dir t a nv =
     installed_opams t a / OpamPackage.to_string nv
 
@@ -138,39 +155,45 @@ module Switch = struct
   let installed_opam_files_dir t a nv =
     installed_package_dir t a nv / "files"
 
-  module Default = struct
+  module DefaultF(L:LAYOUT) = struct
+    let lib_dir = L.lib_dir
 
-    (** Visible files that can be redirected using
-        [config/global-config.config] *)
+    let lib t a n = L.lib_dir t a / OpamPackage.Name.to_string n
 
-    let lib_dir t a = root t a / "lib"
+    let stublibs t a = L.lib_dir t a / "stublibs"
 
-    let lib t a n = lib_dir t a / OpamPackage.Name.to_string n
+    let toplevel t a = L.lib_dir t a / "toplevel"
 
-    let stublibs t a = lib_dir t a / "stublibs"
-
-    let toplevel t a = lib_dir t a / "toplevel"
-
-    let doc_dir t a = root t a / "doc"
+    let doc_dir t a = L.root t a / "doc"
 
     let man_dir ?num t a =
       match num with
-      | None -> root t a / "man"
-      | Some n -> root t a / "man" / ("man" ^ n)
+      | None -> L.root t a / "man"
+      | Some n -> L.root t a / "man" / ("man" ^ n)
 
-    let share_dir t a = root t a / "share"
+    let share_dir t a = L.root t a / "share"
 
     let share t a n = share_dir t a / OpamPackage.Name.to_string n
 
-    let etc_dir t a = root t a / "etc"
+    let etc_dir t a = L.root t a / "etc"
 
     let etc t a n = etc_dir t a / OpamPackage.Name.to_string n
 
     let doc t a n = doc_dir t a / OpamPackage.Name.to_string n
 
-    let bin t a = root t a / "bin"
+    let bin t a = L.root t a / "bin"
 
-    let sbin t a = root t a / "sbin"
+    let sbin t a = L.root t a / "sbin"
+  end
+
+  (** Visible files that can be redirected using
+      [config/global-config.config] *)
+  module Default = struct
+    include DefaultF(struct
+      type ctx = switch
+      let root = root
+      let lib_dir t a = root t a / "lib"
+    end)
 
   end
 

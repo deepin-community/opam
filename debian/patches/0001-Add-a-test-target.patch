@@ -10,14 +10,14 @@ that there is a testsuite and run it accordingly. dh_auto_test checks
  1 file changed, 1 insertion(+)
 
 diff --git a/Makefile b/Makefile
-index b9453c9..724de92 100644
+index f24bf26..6b9619d 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -153,6 +153,7 @@ checker:
- 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) src/tools/opam_check.exe
+@@ -177,6 +177,7 @@ uninstall: opam.install
+ 	$(OPAMINSTALLER) -u $(OPAMINSTALLER_FLAGS) opam-installer.install
  
- .PHONY: tests tests-local tests-git
+ .PHONY: tests
 +test: tests
- tests: $(DUNE_DEP)
- 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) opam.install src/tools/opam_check.exe
- 	$(DUNE) build --profile=$(DUNE_PROFILE) $(DUNE_ARGS) doc/man/opam-topics.inc doc/man/opam-admin-topics.inc
+ tests: $(DUNE_DEP) src/client/no-git-version
+ 	@$(DUNE) runtest $(DUNE_PROFILE_ARG) --root . $(DUNE_ARGS) src/ tests/ --no-buffer; \
+ 	ret=$$?; \

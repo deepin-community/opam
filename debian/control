@@ -6,15 +6,15 @@ Uploaders:
  Mehdi Dogguy <mehdi@debian.org>,
  Nicolas Braud-Santoni <nicoo@debian.org>
 Build-Depends:
- debhelper-compat (= 12),
- ocaml-nox (>= 4.3.0~),
+ debhelper-compat (= 13),
+ ocaml,
  ocamlbuild,
  cppo (>= 1.6.0),
  ocaml-findlib (>= 1.2.4),
  dh-ocaml (>= 0.9),
- dune,
+ ocaml-dune,
  libcudf-ocaml-dev,
- libdose3-ocaml-dev (>= 6.0.1~),
+ libdose3-ocaml-dev (>= 7),
  libre-ocaml-dev (>= 1.7.2~),
  libcmdliner-ocaml-dev (>= 1.0.2~),
  libextlib-ocaml-dev,
@@ -23,14 +23,14 @@ Build-Depends:
  libopam-file-format-ocaml-dev (>= 2.1.2-2~),
  curl
 Build-Depends-Indep:
- texlive-latex-base,
- texlive-lang-french,
- texlive-latex-extra,
- texlive-latex-recommended,
- texlive-fonts-recommended,
- pandoc,
- latex-make
-Standards-Version: 4.4.0
+ texlive-latex-base <!nodoc>,
+ texlive-lang-french <!nodoc>,
+ texlive-latex-extra <!nodoc>,
+ texlive-latex-recommended <!nodoc>,
+ texlive-fonts-recommended <!nodoc>,
+ man2html-base <!nodoc>,
+ latex-make <!nodoc>
+Standards-Version: 4.6.0
 Rules-Requires-Root: no
 Homepage: https://opam.ocaml.org
 Vcs-Git: https://salsa.debian.org/ocaml-team/opam.git
@@ -43,7 +43,6 @@ Depends:
  ${ocaml:Depends},
  ${shlibs:Depends},
  ${misc:Depends},
- opam-doc (= ${source:Version}),
  build-essential,
  opam-installer,
  bubblewrap [linux-any],
@@ -57,6 +56,7 @@ Recommends:
  m4,
  rsync,
  ca-certificates
+Suggests: opam-doc (= ${source:Version}),
 Description: package manager for OCaml
  OPAM stands for OCaml PAckage Manager. It aims to suit to a vast number
  of users and use cases, and has unique features:
@@ -79,6 +79,7 @@ Description: package manager for OCaml
     repository, with minimal effort.
 
 Package: opam-doc
+Build-Profiles: <!nodoc>
 Architecture: all
 Multi-Arch: foreign
 Section: doc

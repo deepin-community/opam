@@ -45,9 +45,9 @@ You may also want to browse the [library APIs](api/).
 
 #### 🐫  What changes does opam do to my filesystem?
 
-opam is designed to be run strictly as user (non-root), and apart for the
-explicit options provided during `opam init`, only writes within `~/.opam` (and
-`/tmp`). This directory — the default "opam root" — contains configuration,
+opam is designed to be run strictly as user (non-root), and except for the
+explicit options provided during `opam init`, opam only writes within `~/.opam`
+(and `/tmp`). This directory — the default "opam root" — contains configuration,
 various internal data, a cache of downloaded archives, and your OCaml
 installations.
 
@@ -89,11 +89,18 @@ enabled. Note, however, that:
 - Only the _package_ build/install/remove commands are protected: if you install
   a program using opam and execute it, it will run with your standard user
   rights.
+- If your installation uses unusual paths (opam root outside `HOME`, system
+  folder, etc.), since `2.0.1` you can use the environment variable
+  `OPAM_USER_PATH_RO` to have them handled by then sandbox script, e.g. This
+  variable format is the same as `PATH`, you can add it in your shell
+  configuration file, e.g `export OPAM_USER_PATH_RO=/rw/usrlocal:/media`.
+  Contained paths are added as read-only.
 - If needed, for special cases like unprivileged containers, sandboxing can be
-  disabled on `opam init` with the `--disable-sandboxing` flag. Or by using a
-  [custom `opamrc`](Manual.html#configfield-wrap-build-commands). Use wisely,
-  broken Makefiles that run `rm -rf /`
-  [__do__ happen](https://github.com/ocaml/opam/issues/3231).
+  disabled on `opam init` with the `--disable-sandboxing` flag (only for
+  non-initialised opam). Or by using a [custom
+  `opamrc`](Manual.html#configfield-wrap-build-commands). Use wisely, broken
+  Makefiles that run `rm -rf /` [__do__
+  happen](https://github.com/ocaml/opam/issues/3231).
 
 ---
 
@@ -165,9 +172,20 @@ opam switch import <file.export> --switch <new switch>
 The file format is human-readable, so you are free to edit the file before doing
 the `import` if you need to customise the installation.
 
-You may also want to have a look at the `opam lock` plugin, that can memorise
-the precise set of installed dependencies for a local package, and the
-associated `opam install DIR --locked` command that can restore them.
+### 🐫 How to share my working switch setup for a specific package ?
+
+When working on a project, it is sometimes needed to share a set of
+dependencies that you know (locally) the project is working with. You can share
+this set by generating a _locked_ opam file. Ths is easily done using the [`lock`
+command](man/opam-lock.html): it creates an opam file with a `depends:` field
+populated with all dependencies, at their exact version in the current
+(working) switch. You can then share this `opam.locked` file, or check it
+in your version-control system.
+
+```shell
+$ opam lock <pkg> # generate a <pkg>.opam.lock file
+$ opam install --locked <pkg> # use <pkg> locked file, if present
+```
 
 ---
 
@@ -201,7 +219,10 @@ need more.
 
 ---
 
-#### 🐫  Some package fail during compilation, complaining about missing dependencies ("m4", "libgtk", etc.)
+#### 🐫  Some packages fail during compilation, complaining about missing dependencies ("m4", "libgtk", etc.)
+
+> NOTE: since opam 2.1.0, the following is directly handled by opam, without
+> relying on a plugin.
 
 They probably depend on system, non-OCaml libraries: they need to be installed
 using your system package manager (apt-get, yum, pacman, homebrew, etc.) since
@@ -384,9 +405,33 @@ ocamlfind, or just remove the problematic files.
 #### 🐫  opam is slow on top of NFS. How can I make it faster?
 
 opam root is usually located in the `home` directory, which, on top of NFS,
-slow down opam operations. Locating opam root in `/tmp` is neither a solution,
-you could loose your opam configuration at each reboot.
+slows down opam operations. Locating opam root in `/tmp` is not a solution:
+you could lose your opam configuration at each reboot.
 
 You can use the [`nfsopam`](https://github.com/UnixJunkie/nfsopam) script to
-have the best of both world: persistence of NFS directory and fast operation of
-local directory.
+have the best of both worlds: persistence of NFS directories and fast operations
+of local directories.
+
+---
+
+#### 🐫  What does the `--cli` option do? Should I be using it everywhere?
+
+`--cli` was introduced in opam 2.1 to deal with changes in the command line
+interface between releases. It tells opam to interpret the command line as a
+specific version, in particular it means that new options or options which
+have had their meaning altered will not be available, or will be behave as they
+did in that version. It only affects the command-line - it does not, for
+example, stop a root from being upgraded from an older version to the current
+version.
+
+We recommend using it in scripts (and programs which call opam) since they can
+then expect to work seamlessly with future versions of the opam client. It's
+also a good idea to use it in blog posts, or other documentation you may share,
+since it allows copy-and-paste to work reliably (a user with a newer version of
+opam should have no issues and a user with an older opam gets a clearer error
+message).
+
+We don't recommend using it in day-to-day use of opam in the shell, because
+you'll be typing more and you won't get to notice exciting new features! If the
+behaviour of a command or option is altered, and you write something which in no
+longer valid, opam will try to tell you what the new command should look like.

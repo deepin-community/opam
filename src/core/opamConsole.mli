@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -43,7 +43,7 @@ type text_style =
 val colorise : text_style -> string -> string
 val colorise' : text_style list -> string -> string
 val acolor : text_style -> unit -> string -> string
-val acolor_w : int -> text_style -> out_channel -> string -> unit
+val acolor_w : int -> text_style -> Format.formatter -> string -> unit
 
 module Symbols : sig
   val rightwards_arrow : OpamCompat.Uchar.t
@@ -63,6 +63,9 @@ module Symbols : sig
   val upwards_arrow : OpamCompat.Uchar.t
   val downwards_arrow : OpamCompat.Uchar.t
   val up_down_arrow : OpamCompat.Uchar.t
+  val downwards_double_arrow : OpamCompat.Uchar.t
+  val downwards_black_arrow : OpamCompat.Uchar.t
+  val black_down_pointing_triangle : OpamCompat.Uchar.t
 end
 
 val utf8_symbol:
@@ -76,12 +79,12 @@ val timer : unit -> unit -> float
 
 (** [log section ~level fmt args]. Used for debug messages, default
     level is 1 *)
-val log : string -> ?level:int -> ('a, out_channel, unit) format -> 'a
+val log : string -> ?level:int -> ('a, Format.formatter, unit) format -> 'a
 
 (** Helper to pass stringifiers to log (use [log "%a" (slog to_string) x]
     rather than [log "%s" (to_string x)] to avoid costly unneeded
     stringifications *)
-val slog : ('a -> string) -> out_channel -> 'a -> unit
+val slog : ('a -> string) -> Format.formatter -> 'a -> unit
 
 val error : ('a, unit, string, unit) format4 -> 'a
 val warning : ('a, unit, string, unit) format4 -> 'a
@@ -111,8 +114,14 @@ val status_line : ('a, unit, string, unit) format4 -> 'a
 val clear_status : unit -> unit
 
 (** Ask the user to press Y/y/N/n to continue (returns a boolean).
-    Defaults to true (yes) if unspecified *)
-val confirm: ?default:bool -> ('a, unit, string, bool) format4 -> 'a
+    Defaults to true (yes) if unspecified.
+    If [require_unsafe_yes] is true, it automatically answer yes to the
+    question if automatic answering is set to [`unsafe_yes] ; otherwise it will
+    prompt and wait user input if it is set [`all_yes] (interactive). Its
+    default is false. *)
+val confirm:
+  ?require_unsafe_yes:bool -> ?default:bool ->
+  ('a, unit, string, bool) format4 -> 'a
 
 (** Read some input from the user (returns a string option) *)
 val read: ('a, unit, string, string option) format4 -> 'a

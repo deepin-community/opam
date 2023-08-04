@@ -13,6 +13,9 @@ binary installer. Opam will automatically update its internal repository at
 `~/.opam` on first run if needed (if using our installer script, a backup can be
 made automatically).
 
+To upgrade shell scripts, and enable sandboxing, don't forget to run `opam init
+--reinit -ni`.
+
 Then see the [Upgrade guide](Upgrade_guide.html) to check the changes.
 
 
@@ -28,13 +31,14 @@ This will simply check your architecture, download and install the proper
 pre-compiled binary, backup your opam data if from an older version, and run
 `opam init`.
 
-(If you have troule with `curl`, just
+(If you have trouble with `curl`, just
 [download the script](https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)
 and run `sh install.sh`)
 
 We provide pre-compiled binaries for:
 - Linux i686, amd64, arm7, arm64
-- OSX (intel 64 bits)
+- OSX (intel 64 bits, arm64)
+- We do not at present provide an official Windows distribution of opam, but please see [this separately maintained distribution](https://fdopen.github.io/opam-repository-mingw/)
 (other platforms are available using the other methods below)
 
 If you don't like scripts, you can just pick your download
@@ -42,17 +46,22 @@ If you don't like scripts, you can just pick your download
 `opam`, and set it as executable, e.g.
 
 ```
-sudo cp <downloaded file> /usr/local/bin/opam
-sudo chmod a+x /usr/local/bin/opam
+sudo install <downloaded file> /usr/local/bin/opam
 ```
 
+> Note that this script is intended for end-users, not CI. For that purpose,
+> you can use pre-built [Docker images for various
+> configurations](https://hub.docker.com/r/ocaml/opam2/).
 
 ## Using your distribution's package system
 
-This is generally the recommended way, when available and up-to-date. Here is a
-list of supported distributions:
+This is generally the recommended way, **when available and up-to-date** (you
+can check [here](Distribution.html) the latest
+available release per distribution). Here is a list of supported distributions:
 
-#### Archlinux
+#### Arch Linux
+
+[![badge](https://repology.org/badge/version-for-repo/arch/opam.svg)](https://repology.org/project/opam/versions)
 
 The [opam](https://www.archlinux.org/packages/community/x86_64/opam/)
 package is available in the official distribution. To install it simply run:
@@ -62,14 +71,16 @@ pacman -S opam
 ```
 
 If you'd like to use the development version there is an [opam-git](https://aur.archlinux.org/packages/opam-git/)
-package available in the [AUR](https://wiki.archlinux.org/index.php/AUR).
-Assuming you have [yaourt](https://aur.archlinux.org/packages/yaourt) installed just run the following command:
+package available in the [AUR](https://wiki.archlinux.org/index.php/Arch_User_Repository).
+Assuming you have [yay](https://github.com/Jguer/yay) installed just run the following command:
 
 ```
-yaourt -S opam-git
+yay -S opam-git
 ```
 
 #### Debian
+
+[![badge](https://repology.org/badge/version-for-repo/debian_stable/opam.svg)](https://repology.org/project/opam/versions) [![badge](https://repology.org/badge/version-for-repo/debian_testing/opam.svg)](https://repology.org/project/opam/versions) [![badge](https://repology.org/badge/version-for-repo/debian_unstable/opam.svg)](https://repology.org/project/opam/versions)
 
 Binary packages of opam are available for the
 [stable](http://packages.debian.org/jessie/opam),
@@ -99,10 +110,20 @@ cave resolve -x repository/ocaml-unofficial
 
 #### [Fedora](http://fedoraproject.org), [CentOS](http://centos.org) and RHEL
 
-No native packages at the moment, you will need to use our pre-built binaries,
-or build from sources.
+[![Fedora 32](https://repology.org/badge/version-for-repo/fedora_32/opam.svg)](https://repology.org/project/opam/versions)
+
+The opam package for Fedora can be installed with the command:
+
+```
+dnf install opam
+```
+
+There is not currently a package for CentOS/RHEL. You will need to use our
+pre-built binaries, or build from sources.
 
 #### Mageia
+
+[![badge](https://repology.org/badge/version-for-repo/mageia_cauldron/opam.svg)](https://repology.org/project/opam/versions)
 
 The opam package for Mageia can be installed with the command:
 
@@ -112,15 +133,17 @@ urpmi opam
 
 #### OpenBSD
 
-Opam builds via sources fine on OpenBSD 5.6 or earlier, and is available in the
-ports and packages tree on OpenBSD 5.7 or higher.
+[![badge](https://repology.org/badge/version-for-repo/openbsd/opam.svg)](https://repology.org/project/opam/versions)
+
+The opam package for OpenBSD can be installed with the command (since OpenBSD 5.7):
 
 ```
-cd /usr/ports/sysutils/opam
-make install
+pkg_add opam
 ```
 
 #### FreeBSD
+
+[![badge](https://repology.org/badge/version-for-repo/freebsd/opam.svg)](https://repology.org/project/opam/versions)
 
 Opam is available in the ports and packages tree on FreeBSD 11 or higher.
 
@@ -131,12 +154,18 @@ make install
 
 #### OSX
 
-Opam packages for [homebrew](http://mxcl.github.com/homebrew/) and
-[MacPorts](http://www.macports.org/) are available:
+[![badge](https://repology.org/badge/version-for-repo/homebrew/opam.svg)](https://repology.org/project/opam/versions) [![badge](https://repology.org/badge/version-for-repo/macports/opam.svg)](https://repology.org/project/opam/versions)
+
+Opam packages for [homebrew](http://mxcl.github.com/homebrew/) and [MacPorts](http://www.macports.org/) are available.
+homebrew need a prior installation of `gpatch`, as opam uses gnu-specific options.
 
 ```
-brew install opam                   # Homebrew
-port install opam                   # MacPort
+# Homebrew
+brew install gpatch
+brew install opam
+
+# MacPort
+port install opam
 ```
 
 See also
@@ -145,10 +174,31 @@ for Opam usage.
 
 #### Ubuntu
 
-Ubuntu has native packages for opam:
+[![badge](https://repology.org/badge/version-for-repo/ubuntu_20_04/opam.svg)](https://repology.org/project/opam/versions)
+
+##### Versions 18.04 and newer
+There is a [ppa](https://launchpad.net/~avsm/+archive/ubuntu/ppa) available that contains the current stable version of `opam`.
+```
+add-apt-repository ppa:avsm/ppa
+apt update
+apt install opam
+```
+
+##### Versions older than 18.04
+Use the binary distribution. Instructions provided at https://opam.ocaml.org/doc/Install.html#Binary-distribution
+
+#### Windows
+
+Full support for Windows is planned for opam 2.2, and we expect to provide an opam package in [Chocolatey](https://chocolatey.org/) and [winget](https://docs.microsoft.com/en-us/windows/package-manager/). If you'd like to help out, please get in touch!
+#### Guix & Guix System
+
+[![badge](https://repology.org/badge/version-for-repo/gnuguix/opam.svg)](https://repology.org/project/opam/versions)
+
+The opam package for [guix](https://www.gnu.org/software/guix/) can be installed with the command:
 
 ```
-apt install opam
+# Guix
+guix install opam
 ```
 
 ## From Sources
@@ -163,12 +213,9 @@ You can also download the full archives, including opam dependencies (these
 don't require any extra downloads, just the OCaml compiler -- 4.02.3 or later
 for the latest version):
 
-* [2.0.0~rc](https://github.com/ocaml/opam/releases/download/2.0.0-rc/opam-full-2.0.0-rc.tar.gz)
-  MD5: 6e89905dbe9203dee3e883b70e210285
-  SHA384: 8a9ee03cdcd78a7d44e92c9b1c6e841605a49ecff4ebd977a632708ef6250f9f3ec488ecd1852f76d1b6cfc2d8ad9117
-* [1.2.2](https://github.com/ocaml/opam/releases/download/1.2.2/opam-full-1.2.2.tar.gz)
-  MD5: 7d348c2898795e9f325fb80eaaf5eae8
-  SHA384: 3a0a7868b5f510c1248959ed350eecacfe1abd886e373fd31066ce10871354010ef057934df026e5fad389ead6c2857d
+* [2.0.8](https://github.com/ocaml/opam/releases/download/2.0.8/opam-full-2.0.8.tar.gz)
+ - MD5: 69e95d318fec8027b9eb6af6075a2a13
+ - SHA384: f534860f511768f78f646be4248df58ecaf699dc55eea90e21f0d8d6e2bd23235a9ca132fcf17bf854cf3c25adfab4c8
 
 Follow the instructions in the included
 [`README.md`](https://github.com/ocaml/opam#readme) to get opam built and
@@ -178,16 +225,3 @@ installed from there.
 > ```
 > OCAMLPARAM="safe-string=0,_" make lib-ext
 > ```
-
-
-#### Using ocamlbrew
-
-[ocamlbrew](https://github.com/hcarty/ocamlbrew) is a script that can bootstrap
-an OCaml environment including opam, from source. This option does not require
-an existing OCaml installation, or a pre-compiled opam binary for your platform.
-To bootstrap a new OCaml environment including opam, make sure that you have the
-necessary pre-requisites installed to run ocamlbrew, and then run:
-
-```
-curl -kL https://raw.github.com/hcarty/ocamlbrew/master/ocamlbrew-install | env OCAMLBREW_FLAGS="-r" bash
-```

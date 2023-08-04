@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -14,11 +14,19 @@
 
 open OpamTypes
 
+module Package : sig
+  type t = Cudf.package
+  val equal : t -> t -> bool
+  val compare : t -> t -> int
+  val to_json : t -> OpamJson.t
+  val of_json : OpamJson.t -> t option
+end
+
 (** Cudf sets *)
-module Set: OpamStd.SET with type elt = Cudf.package
+module Set: OpamStd.SET with type elt = Package.t
 
 (** Cudf maps *)
-module Map: OpamStd.MAP with type key = Cudf.package
+module Map: OpamStd.MAP with type key = Package.t
 
 (** Cudf graph *)
 module Graph: sig
@@ -34,31 +42,31 @@ module Graph: sig
   (** Return the transitive closure of [g] *)
   val transitive_closure: t -> t
 
-  (** Return the transitive closure of dependencies of [set],
-      sorted in topological order. *)
-  val close_and_linearize: t -> Set.t -> Cudf.package list
-
   (** Reverse the direction of all edges *)
   val mirror: t -> t
 end
+
 
 (** Computation of differences between universe. Returns the sets of packages to
     install and remove respectively. *)
 val diff: Cudf.universe -> Cudf.universe -> (Set.t * Set.t)
 
 (** Cudf action graph *)
-module ActionGraph: OpamActionGraph.SIG with type package = Cudf.package
+module Action: OpamActionGraph.ACTION with type package = Package.t
+module ActionGraph: OpamActionGraph.SIG with type package = Package.t
 
 (** Abstract type that may be returned in case of conflicts *)
 type conflict
 
-(** Return the transitive closure of dependencies of [set],
-    sorted in topological order *)
-val dependencies: Cudf.universe -> Cudf.package list -> Cudf.package list
+(** Return the transitive closure of dependencies of [set] *)
+val dependencies: Cudf.universe -> Set.t -> Set.t
 
-(** Return the transitive closure of dependencies of [set],
-    sorted in topological order *)
-val reverse_dependencies: Cudf.universe -> Cudf.package list -> Cudf.package list
+(** Return the transitive closure of reverse dependencies of [set] *)
+val reverse_dependencies: Cudf.universe -> Set.t -> Set.t
+
+(** Sorts the given packages topolgically (be careful if there are cycles, e.g.
+   if the universe was loaded with [post] dependencies enabled) *)
+val dependency_sort: Cudf.universe -> Set.t -> Cudf.package list
 
 (** Check if a request is satisfiable and return the reasons why not unless
     [explain] is set to [false] *)
@@ -173,6 +181,16 @@ val s_pinned: string
 (** the number of versions of the package since this one, cubed *)
 val s_version_lag: string
 
+(** valid cudf name for the dummy package used for enforcing opam's switch
+    invariants *)
+val opam_invariant_package_name: string
+
+(** valid cudf name and version for the dummy package used for enforcing opam's
+    switch invariants *)
+val opam_invariant_package: string * int
+
+val is_opam_invariant: Cudf.package -> bool
+
 (** {2 Pretty-printing} *)
 
 (** Convert a package constraint to something readable. *)
@@ -185,24 +203,44 @@ val cycle_conflict:
   version_map:int package_map -> Cudf.universe ->
   string list list -> ('a, conflict) result
 
+type explanation =
+  [ `Conflict of string option * string list * bool
+  | `Missing of string option * string *
+                (OpamPackage.Name.t * OpamFormula.version_formula)
+                  OpamFormula.formula
+  ]
+
 (** Convert a conflict to something readable by the user. The second argument
     should return a string explaining the unavailability, or the empty string,
     when called on an unavailable package (the reason can't be known this deep
     in the solver) *)
-val string_of_conflict:
+val string_of_conflicts:
   package_set -> (name * OpamFormula.version_formula -> string) -> conflict ->
   string
 
-(** Returns three lists of strings:
-    - the final reasons why the request can't be satisfied
-    - the dependency chains explaining it
-    - the cycles in the actions to process (exclusive with the other two) *)
-val strings_of_conflict:
-  package_set -> (name * OpamFormula.version_formula -> string) -> conflict ->
-  string list * string list * string list
+val string_of_explanations:
+  (name * OpamFormula.version_formula -> string) ->
+  explanation list * string list list ->
+  string
 
-val conflict_chains:
-  package_set -> conflict -> (name * OpamFormula.version_formula) list list
+(** Returns two lists:
+    - the reasons why the request can't be satisfied with conflict explanations
+    - the cycles in the actions to process (exclusive with the first) *)
+val conflict_explanations:
+  package_set -> (name * OpamFormula.version_formula -> string) -> conflict ->
+  (string * string list * string list) list * string list
+
+val string_of_explanation:
+  (name * OpamFormula.version_formula -> string) -> explanation ->
+  string * string list * string list
+
+val conflict_explanations_raw:
+  package_set -> conflict -> explanation list * string list list
+
+(** Properly concat a single conflict as returned by [conflict_explanations] for
+   display *)
+val string_of_conflict:
+  ?start_column:int -> string * string list * string list -> string
 
 (** Dumps the given cudf universe to the given channel *)
 val dump_universe: out_channel -> Cudf.universe -> unit
@@ -228,3 +266,44 @@ val packages: Cudf.universe -> Cudf.package list
 (** Converts an OPAM request to a Cudf request *)
 val to_cudf: Cudf.universe -> Cudf_types.vpkg request
   -> Cudf.preamble * Cudf.universe * Cudf.request
+
+
+module Json: sig
+  open Cudf_types
+
+  val version_to_json : version OpamJson.encoder
+  val version_of_json : version OpamJson.decoder
+
+  val relop_to_json : relop OpamJson.encoder
+  val relop_of_json : relop OpamJson.decoder
+
+  val enum_keep_to_json : enum_keep OpamJson.encoder
+  val enum_keep_of_json : enum_keep OpamJson.decoder
+
+  val constr_to_json : constr OpamJson.encoder
+  val constr_of_json : constr OpamJson.decoder
+
+  val vpkg_to_json : vpkg OpamJson.encoder
+  val vpkg_of_json : vpkg OpamJson.decoder
+  val vpkglist_to_json : vpkglist OpamJson.encoder
+  val vpkglist_of_json : vpkglist OpamJson.decoder
+
+  val veqpkg_to_json : veqpkg OpamJson.encoder
+  val veqpkg_of_json : veqpkg OpamJson.decoder
+  val veqpkglist_to_json : veqpkglist OpamJson.encoder
+  val veqpkglist_of_json : veqpkglist OpamJson.decoder
+
+  val vpkgformula_to_json : vpkgformula OpamJson.encoder
+  val vpkgformula_of_json : vpkgformula OpamJson.decoder
+
+  val typedecl1_to_json : typedecl1 OpamJson.encoder
+  val typedecl1_of_json : typedecl1 OpamJson.decoder
+  val typedecl_to_json : typedecl OpamJson.encoder
+  val typedecl_of_json : typedecl OpamJson.decoder
+
+  val typed_value_to_json : typed_value OpamJson.encoder
+  val typed_value_of_json : typed_value OpamJson.decoder
+
+  val package_to_json : Cudf.package OpamJson.encoder
+  val package_of_json : Cudf.package OpamJson.decoder
+end

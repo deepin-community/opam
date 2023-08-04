@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -30,6 +30,7 @@ let curl_args = [
   CString "--user-agent", None; user_agent, None;
   CString "-L", None;
   CString "-o", None; CIdent "out", None;
+  CString "--", None; (* End list of options *)
   CIdent "url", None;
 ]
 
@@ -37,23 +38,39 @@ let wget_args = [
   CString "--content-disposition", None;
   CString "-t", None; CIdent "retry", None;
   CString "-O", None; CIdent "out", None;
-  CIdent "url", None;
   CString "-U", None; user_agent, None;
+  CString "--", None; (* End list of options *)
+  CIdent "url", None;
 ]
 
-let download_args ~url ~out ~retry ?checksum ~compress =
+let fetch_args = [
+  CString "-o", None; CIdent "out", None;
+  CString "--user-agent", None; user_agent, None;
+  CString "--", None; (* End list of options *)
+  CIdent "url", None;
+]
+
+let ftp_args = [
+  CString "-o", None; CIdent "out", None;
+  CString "-U", None; user_agent, None;
+  CString "--", None; (* End list of options *)
+  CIdent "url", None;
+]
+
+let download_args ~url ~out ~retry ?checksum ~compress () =
   let cmd, _ = Lazy.force OpamRepositoryConfig.(!r.download_tool) in
   let cmd =
     match cmd with
     | [(CIdent "wget"), _] -> cmd @ wget_args
+    | [(CIdent "fetch"), _] -> cmd @ fetch_args
+    | [(CIdent "ftp"), _] -> cmd @ ftp_args
     | [_] -> cmd @ curl_args (* Assume curl if the command is a single arg *)
     | _ -> cmd
   in
   OpamFilter.single_command (fun v ->
       if not (OpamVariable.Full.is_global v) then None else
       match OpamVariable.to_string (OpamVariable.Full.variable v) with
-      | "curl" -> Some (S "curl")
-      | "wget" -> Some (S "wget")
+      | ("curl" | "wget" | "fetch" | "ftp") as dl_tool-> Some (S dl_tool)
       | "url" -> Some (S (OpamUrl.to_string url))
       | "out" -> Some (S out)
       | "retry" -> Some (S (string_of_int retry))
@@ -99,7 +116,7 @@ let tool_return url ret =
                     code (OpamUrl.to_string url))
       else Done ()
 
-let download_command ~compress ?checksum ~url ~dst =
+let download_command ~compress ?checksum ~url ~dst () =
   let cmd, args =
     match
       download_args
@@ -108,6 +125,7 @@ let download_command ~compress ?checksum ~url ~dst =
         ~retry:OpamRepositoryConfig.(!r.retries)
         ?checksum
         ~compress
+        ()
     with
     | cmd::args -> cmd, args
     | [] ->
@@ -118,7 +136,7 @@ let download_command ~compress ?checksum ~url ~dst =
 
 let really_download
     ?(quiet=false) ~overwrite ?(compress=false) ?checksum ?(validate=true)
-    ~url ~dst =
+    ~url ~dst () =
   assert (url.OpamUrl.backend = `http);
   let tmp_dst = dst ^ ".part" in
   if Sys.file_exists tmp_dst then OpamSystem.remove tmp_dst;
@@ -134,7 +152,7 @@ let really_download
         log "Could not download file at %s." (OpamUrl.to_string url);
         raise e)
   @@ fun () ->
-  download_command ~compress ?checksum ~url ~dst:tmp_dst
+  download_command ~compress ?checksum ~url ~dst:tmp_dst ()
   @@+ fun () ->
   if not (Sys.file_exists tmp_dst) then
     fail (Some "Downloaded file not found",
@@ -167,6 +185,7 @@ let download_as ?quiet ?validate ~overwrite ?compress ?checksum url dst =
     really_download ?quiet ~overwrite ?compress ?checksum ?validate
       ~url
       ~dst:(OpamFilename.to_string dst)
+      ()
 
 let download ?quiet ?validate ~overwrite ?compress ?checksum url dstdir =
   let dst =

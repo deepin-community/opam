@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -16,12 +16,16 @@ module type SET = sig
   val map: (elt -> elt) -> t -> t
   val is_singleton: t -> bool
   val choose_one : t -> elt
+  val choose_opt : t -> elt option
   val of_list: elt list -> t
   val to_string: t -> string
   val to_json: t -> OpamJson.t
+  val of_json: OpamJson.t -> t option
   val find: (elt -> bool) -> t -> elt
   val find_opt: (elt -> bool) -> t -> elt option
   val safe_add: elt -> t -> t
+  val fixpoint: (elt -> t) -> t -> t
+  val map_reduce: ?default:'a -> (elt -> 'a) -> ('a -> 'a -> 'a) -> t -> 'a
 
   module Op : sig
     val (++): t -> t -> t
@@ -33,20 +37,25 @@ module type MAP = sig
   include Map.S
   val to_string: ('a -> string) -> 'a t -> string
   val to_json: ('a -> OpamJson.t) -> 'a t -> OpamJson.t
+  val of_json: (OpamJson.t -> 'a option) -> OpamJson.t -> 'a t option
   val keys: 'a t -> key list
   val values: 'a t -> 'a list
   val find_opt: key -> 'a t -> 'a option
+  val choose_opt: 'a t -> (key * 'a) option
   val union: ('a -> 'a -> 'a) -> 'a t -> 'a t -> 'a t
   val is_singleton: 'a t -> bool
   val of_list: (key * 'a) list -> 'a t
   val safe_add: key -> 'a -> 'a t -> 'a t
   val update: key -> ('a -> 'a) -> 'a -> 'a t -> 'a t
+  val map_reduce:
+    ?default:'b -> (key -> 'a -> 'b) -> ('b -> 'b -> 'b) -> 'a t -> 'b
 end
 module type ABSTRACT = sig
   type t
   val of_string: string -> t
   val to_string: t -> string
   val to_json: t -> OpamJson.t
+  val of_json: OpamJson.t -> t option
   module Set: SET with type elt = t
   module Map: MAP with type key = t
 end
@@ -55,6 +64,7 @@ module type OrderedType = sig
   include Set.OrderedType
   val to_string: t -> string
   val to_json: t -> OpamJson.t
+  val of_json: OpamJson.t -> t option
 end
 
 let max_print = 100
@@ -102,12 +112,15 @@ module OpamList = struct
   let to_string f =
     concat_map ~left:"{ " ~right:" }" ~nil:"{}" ", " f
 
-  let rec remove_duplicates = function
-    | a::(b::_ as r) when a = b -> remove_duplicates r
-    | a::r -> a::remove_duplicates r
+  let rec remove_duplicates_eq eq = function
+    | a::(b::_ as r) when eq a b -> remove_duplicates_eq eq r
+    | a::r -> a::remove_duplicates_eq eq r
     | [] -> []
 
-  let sort_nodup cmp l = remove_duplicates (List.sort cmp l)
+  let remove_duplicates l = remove_duplicates_eq ( = ) l
+
+  let sort_nodup cmp l =
+    remove_duplicates_eq (fun a b -> cmp a b = 0) (List.sort cmp l)
 
   let filter_map f l =
     let rec loop accu = function
@@ -137,6 +150,10 @@ module OpamList = struct
     | [] -> [value]
     | l when index <= 0 -> value :: l
     | x::l -> x :: insert_at (index - 1) value l
+
+  let rec assoc_opt x = function
+      [] -> None
+    | (a,b)::l -> if compare a x = 0 then Some b else assoc_opt x l
 
   let pick_assoc x l =
     let rec aux acc = function
@@ -183,6 +200,9 @@ module Set = struct
       else if is_singleton s then choose s
       else failwith "choose_one"
 
+    let choose_opt s =
+      try Some (choose s) with Not_found -> None
+
     let of_list l =
       List.fold_left (fun set e -> add e set) empty l
 
@@ -212,6 +232,18 @@ module Set = struct
       let jsons = List.map O.to_json elements in
       `A jsons
 
+    let of_json = function
+      | `A jsons ->
+        begin try
+            let get = function
+              | None -> raise Not_found
+              | Some v -> v in
+            let elems = List.map get (List.map O.of_json jsons) in
+            Some (S.of_list elems)
+          with Not_found -> None
+        end
+      | _ -> None
+
     module Op = struct
       let (++) = union
       let (--) = diff
@@ -222,6 +254,26 @@ module Set = struct
       if mem elt t
       then failwith (Printf.sprintf "duplicate entry %s" (O.to_string elt))
       else add elt t
+
+    let fixpoint f =
+      let open Op in
+      let rec aux fullset curset =
+        if is_empty curset then fullset else
+        let newset = fold (fun nv set -> set ++ f nv) curset empty in
+        let fullset = fullset ++ curset in
+        aux fullset (newset -- fullset)
+      in
+      aux empty
+
+    let map_reduce ?default f op t =
+      match choose_opt t with
+      | Some x ->
+        fold (fun x acc -> op acc (f x)) (remove x t) (f x)
+      | None ->
+        match default with
+        | Some d -> d
+        | None -> invalid_arg "Set.map_reduce"
+
   end
 
 end
@@ -287,7 +339,29 @@ module Map = struct
         ) bindings in
       `A jsons
 
+    let of_json value_of_json = function
+      | `A jsons ->
+        begin try
+            let get_pair = function
+              | `O binding ->
+                begin match
+                    O.of_json (List.assoc "key" binding),
+                    value_of_json (List.assoc "value" binding)
+                  with
+                  | Some key, Some value -> (key, value)
+                  | _ -> raise Not_found
+                end
+              | _ -> raise Not_found in
+            let pairs = List.map get_pair jsons in
+            Some (of_list pairs)
+          with Not_found -> None
+        end
+      | _ -> None
+
     let find_opt k map = try Some (find k map) with Not_found -> None
+
+    let choose_opt m =
+      try Some (choose m) with Not_found -> None
 
     let safe_add k v map =
       if mem k map
@@ -298,6 +372,14 @@ module Map = struct
       let v = try find k map with Not_found -> zero in
       add k (f v) map
 
+    let map_reduce ?default f op t =
+      match choose_opt t with
+      | Some (k, v) ->
+        fold (fun k v acc -> op acc (f k v)) (remove k t) (f k v)
+      | None ->
+        match default with
+        | Some d -> d
+        | None -> invalid_arg "Map.map_reduce"
   end
 
 end
@@ -307,11 +389,15 @@ module AbstractString = struct
   let of_string x = x
   let to_string x = x
   let to_json x = `String x
+  let of_json = function
+    | `String x -> Some x
+    | _ -> None
   module O = struct
     type t = string
     let to_string = to_string
     let compare = compare
     let to_json = to_json
+    let of_json = of_json
   end
   module Set = Set.Make(O)
   module Map = Map.Make(O)
@@ -323,6 +409,9 @@ module OInt = struct
   let compare = compare
   let to_string = string_of_int
   let to_json i = `String (string_of_int i)
+  let of_json = function
+    | `String s -> (try Some (int_of_string s) with _ -> None)
+    | _ -> None
 end
 
 module IntMap = Map.Make(OInt)
@@ -365,6 +454,10 @@ module Option = struct
     | Some x -> f x
     | None -> none
 
+  let to_list = function
+    | None -> []
+    | Some x -> [x]
+
   let some x = Some x
   let none _ = None
 
@@ -395,6 +488,9 @@ module OpamString = struct
     let compare = compare
     let to_string x = x
     let to_json x = `String x
+    let of_json = function
+      | `String s -> Some s
+      | _ -> None
   end
 
   module StringSet = Set.Make(OString)
@@ -409,14 +505,16 @@ module OpamString = struct
   let starts_with ~prefix s =
     let x = String.length prefix in
     let n = String.length s in
-    n >= x
-    && String.sub s 0 x = prefix
+    n >= x &&
+    let rec chk i = i >= x || prefix.[i] = s.[i] && chk (i+1) in
+    chk 0
 
   let ends_with ~suffix s =
     let x = String.length suffix in
     let n = String.length s in
-    n >= x
-    && String.sub s (n - x) x = suffix
+    n >= x &&
+    let rec chk i = i >= x || suffix.[i] = s.[i+n-x] && chk (i+1) in
+    chk 0
 
   let contains_char s c =
     try let _ = String.index s c in true
@@ -428,12 +526,27 @@ module OpamString = struct
   let exact_match re s =
     try
       let subs = Re.exec re s in
-      let subs = Array.to_list (Re.get_all_ofs subs) in
+      let subs = Array.to_list (Re.Group.all_offset subs) in
       let n = String.length s in
       let subs = List.filter (fun (s,e) -> s=0 && e=n) subs in
       List.length subs > 0
     with Not_found ->
       false
+
+  let find_from f s i =
+    let l = String.length s in
+    if i < 0 || i > l then
+      invalid_arg "find_from"
+    else
+      let rec g i =
+        if i < l then
+          if f s.[i] then
+            i
+          else
+            g (succ i)
+        else
+          raise Not_found in
+      g i
 
   let map f s =
     let len = String.length s in
@@ -526,12 +639,41 @@ module OpamString = struct
     for i = 0 to String.length s - 1 do acc := f !acc s.[i] done;
     !acc
 
+  let compare_case s1 s2 =
+    let l1 = String.length s1 and l2 = String.length s2 in
+    let len = min l1 l2 in
+    let rec aux i =
+      if i < len then
+        let c1 = s1.[i] and c2 = s2.[i] in
+        match Char.compare (Char.lowercase_ascii c1) (Char.lowercase_ascii c2)
+        with
+        | 0 ->
+          (match Char.compare c1 c2 with
+           | 0 -> aux (i+1)
+           | c -> c)
+        | c -> c
+      else
+        if l1 < l2 then -1
+        else if l1 > l2 then 1
+        else 0
+    in
+    aux 0
+
+  let is_prefix_of ~from ~full s =
+    let length_s = String.length s in
+    let length_full = String.length full in
+    if from < 0 || from > length_full then
+      invalid_arg "is_prefix_of"
+    else
+      length_s <= length_full
+      && length_s > from
+      && String.sub full 0 length_s = s
+
 end
 
 type warning_printer =
   {mutable warning : 'a . ('a, unit, string, unit) format4 -> 'a}
 let console = ref {warning = fun fmt -> Printf.ksprintf prerr_string fmt}
-
 
 module Env = struct
 
@@ -597,9 +739,9 @@ module OpamSys = struct
     if Sys.win32 then fun path ->
       let length = String.length path in
       let rec f acc index current last normal =
-        if index = length
-        then let current = current ^ String.sub path last (index - last) in
-          if current <> "" then current::acc else acc
+        if index = length then
+          let current = current ^ String.sub path last (index - last) in
+          List.rev (if current <> "" then current::acc else acc)
         else let c = path.[index]
           and next = succ index in
           if c = ';' && normal || c = '"' then
@@ -634,7 +776,7 @@ module OpamSys = struct
 
   let tty_in = Unix.isatty Unix.stdin
 
-  let default_columns =
+  let default_columns = lazy (
     let default = 16_000_000 in
     let cols =
       try int_of_string (Env.get "COLUMNS") with
@@ -642,6 +784,7 @@ module OpamSys = struct
       | Failure _ -> default
     in
     if cols > 0 then cols else default
+  )
 
   let get_terminal_columns () =
     let fallback = 80 in
@@ -663,12 +806,15 @@ module OpamSys = struct
     in
     if cols > 0 then cols else fallback
 
-  let win32_get_console_width () =
-    let hConsoleOutput = OpamStubs.(getStdHandle STD_OUTPUT_HANDLE) in
-    let {OpamStubs.size = (width, _); _} =
-      OpamStubs.getConsoleScreenBufferInfo hConsoleOutput
-    in
-    width
+  let win32_get_console_width default_columns =
+    try
+      let hConsoleOutput = OpamStubs.(getStdHandle STD_OUTPUT_HANDLE) in
+      let {OpamStubs.size = (width, _); _} =
+        OpamStubs.getConsoleScreenBufferInfo hConsoleOutput
+      in
+      width
+    with Not_found ->
+      Lazy.force default_columns
 
   let terminal_columns =
     let v = ref (lazy (get_terminal_columns ())) in
@@ -680,17 +826,19 @@ module OpamSys = struct
     in
     if Sys.win32 then
       fun () ->
-        if tty_out
-        then win32_get_console_width ()
-        else default_columns
+        win32_get_console_width default_columns
     else
       fun () ->
         if tty_out
         then Lazy.force !v
-        else default_columns
+        else Lazy.force default_columns
 
   let home =
-    let home = lazy (try Env.get "HOME" with Not_found -> Sys.getcwd ()) in
+    (* Note: we ask Unix.getenv instead of Env.get to avoid
+       forcing the environment in this function that is used
+       before the .init() functions are called -- see
+       OpamStateConfig.default. *)
+    let home = lazy (try Unix.getenv "HOME" with Not_found -> Sys.getcwd ()) in
     fun () -> Lazy.force home
 
   let etc () = "/etc"
@@ -707,6 +855,10 @@ module OpamSys = struct
         in
         Hashtbl.add memo arg r;
         r
+
+  let system () =
+    (* CSIDL_SYSTEM = 0x25 *)
+    OpamStubs.(shGetFolderPath 0x25 SHGFP_TYPE_CURRENT)
 
   type os =
     | Darwin
@@ -844,6 +996,45 @@ module OpamSys = struct
     List.iter
       (fun f -> try f () with _ -> ())
       !registered_at_exit
+
+  let is_cygwin_variant =
+    if Sys.win32 then
+      let results = Hashtbl.create 17 in
+      let requires_cygwin name =
+        let cmd = Printf.sprintf "cygcheck \"%s\"" name in
+        let ((c, _, _) as process) = Unix.open_process_full cmd (Unix.environment ()) in
+        let rec f a =
+          match input_line c with
+          | x ->
+              if OpamString.ends_with ~suffix:"cygwin1.dll" (String.trim x) then
+                if OpamString.starts_with ~prefix:"  " x then
+                  f `Cygwin
+                else if a <> `Cygwin then
+                  f `CygLinked
+                else
+                  f a
+              else
+                f a
+          | exception e ->
+              Unix.close_process_full process |> ignore;
+              fatal e;
+              a
+        in
+        f `Native
+      in
+      fun name ->
+        if Filename.is_relative name then
+          requires_cygwin name
+        else
+          try
+            Hashtbl.find results name
+          with Not_found ->
+            let result = requires_cygwin name
+            in
+              Hashtbl.add results name result;
+              result
+    else
+      fun _ -> `Native
 
   exception Exit of int
   exception Exec of string * string array * string array
@@ -1128,7 +1319,24 @@ module OpamFormat = struct
     | []    -> ""
     | [a]   -> a
     | [a;b] -> Printf.sprintf "%s %s %s" a last b
-    | h::t  -> Printf.sprintf "%s, %s" h (pretty_list t)
+    | h::t  -> Printf.sprintf "%s, %s" h (pretty_list ~last t)
+
+  let as_aligned_table ?(width=OpamSys.terminal_columns ()) l =
+    let itlen =
+      List.fold_left (fun acc s -> max acc (visual_length s))
+        0 l
+    in
+    let by_line = (width + 1) / (itlen + 1) in
+    if by_line <= 1 then
+      List.map (fun x -> [x]) l
+    else
+    let rec aux rline n = function
+      | [] -> [List.rev rline]
+      | x::r as line ->
+        if n = 0 then List.rev rline :: aux [] by_line line
+        else aux (x :: rline) (n-1) r
+    in
+    align_table (aux [] by_line l)
 
 end
 
@@ -1202,6 +1410,10 @@ module Config = struct
 
   type env_var = string
 
+  type when_ = [ `Always | `Never | `Auto ]
+  type when_ext = [ `Extended | when_ ]
+  type answer = [ `unsafe_yes | `all_yes | `all_no | `ask ]
+
   let env conv var =
     try Option.map conv (Env.getopt ("OPAM"^var))
     with Failure _ ->
@@ -1210,21 +1422,47 @@ module Config = struct
         "Invalid value for environment variable OPAM%s, ignored." var;
       None
 
-  let env_bool var =
-    env (fun s -> match String.lowercase_ascii s with
-        | "" | "0" | "no" | "false" -> false
-        | "1" | "yes" | "true" -> true
-        | _ -> failwith "env_bool")
-      var
+  let bool_of_string s =
+    match String.lowercase_ascii s with
+    | "" | "0" | "no" | "false" -> Some false
+    | "1" | "yes" | "true" -> Some true
+    | _ -> None
+
+  let bool s =
+    match bool_of_string s with
+    | Some s -> s
+    | None -> failwith "env_bool"
+
+  let env_bool var = env bool var
 
   let env_int var = env int_of_string var
 
+  type level = int
   let env_level var =
-    env (fun s -> match String.lowercase_ascii s with
-        | "" | "no" | "false" -> 0
-        | "yes" | "true" -> 1
-        | s -> int_of_string s)
+    env (function s ->
+        if s = "" then 0 else
+        match bool_of_string s with
+        | Some true -> 0
+        | Some false -> 1
+        | None -> int_of_string s)
       var
+
+  type sections = int option OpamString.Map.t
+  let env_sections var =
+    env (fun s ->
+      let f map elt =
+        let parse_value (section, value) =
+          try
+            (section, Some (int_of_string value))
+          with Failure _ ->
+            (section, None)
+        in
+        let (section, level) =
+          Option.map_default parse_value (elt, None) (OpamString.cut_at elt ':')
+        in
+        OpamString.Map.add section level map
+      in
+      List.fold_left f OpamString.Map.empty (OpamString.split s ' ')) var
 
   let env_string var =
     env (fun s -> s) var
@@ -1253,35 +1491,33 @@ module Config = struct
     | `Never -> false
     | `Auto -> Lazy.force auto
 
-  let initk k =
-    let utf8 = Option.Op.(
-        env_when_ext "UTF8" ++
-        (env_bool "UTF8MSGS" >>= function
-          | true -> Some `Extended
-          | false -> None)
-      ) in
-    let answer = match env_bool "YES", env_bool "NO" with
-      | Some true, _ -> Some (Some true)
-      | _, Some true -> Some (Some false)
-      | None, None -> None
-      | _ -> Some None
-    in
-    OpamCoreConfig.(setk (setk (fun c -> r := c; k)) !r)
-      ?debug_level:(env_level "DEBUG")
-      ?verbose_level:(env_level "VERBOSE")
-      ?color:(env_when "COLOR")
-      ?utf8
-      ?disp_status_line:(env_when "STATUSLINE")
-      ?answer
-      ?safe_mode:(env_bool "SAFE")
-      ?log_dir:(env_string "LOGS")
-      ?keep_log_dir:(env_bool "KEEPLOGS")
-      ?errlog_length:(env_int "ERRLOGLEN")
-      ?merged_output:(env_bool "MERGEOUT")
-      ?use_openssl:(env_bool "USEOPENSSL")
-      ?precise_tracking:(env_bool "PRECISETRACKING")
+  let answer s =
+    match String.lowercase_ascii s with
+    | "ask" -> `ask
+    | "yes" -> `all_yes
+    | "no" -> `all_no
+    | "unsafe-yes" -> `unsafe_yes
+    | _ -> failwith "env_answer"
 
-  let init ?noop:_ = initk (fun () -> ())
+  let env_answer =
+    env (fun s ->
+        try if bool s then `all_yes else `all_no
+        with Failure _ -> answer s)
+
+
+  module E = struct
+    type t = ..
+    let (r : t list ref) = ref []
+
+    let update v = r := v :: !r
+    let updates l = r := l @ !r
+
+    let find var = OpamList.find_map var !r
+    let value var =
+      let l = lazy (try Some (find var); with Not_found -> None) in
+      fun () -> Lazy.force l
+  end
+
 end
 
 module List = OpamList

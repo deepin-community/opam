@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -35,7 +35,9 @@ val rmdir: Dir.t -> unit
 (** Cleans the contents of a directory, but keeps the directory in place. *)
 val cleandir: Dir.t -> unit
 
-(** Removes an empty directory, as well as any empty leading path components *)
+(** Removes an empty directory, as well as any empty leading path components.
+    Must be called only on a directory that is known to not have empty parents,
+    only internal opam directory (and not tmp dir). *)
 val rmdir_cleanup: Dir.t -> unit
 
 (** Create a directory *)
@@ -93,6 +95,9 @@ val with_tmp_dir: (Dir.t -> 'a) -> 'a
 (** Provide an automatically cleaned up temp directory to a job *)
 val with_tmp_dir_job: (Dir.t -> 'a OpamProcess.job) -> 'a OpamProcess.job
 
+(** Raw function to create a temporary directory. No automatic cleanup *)
+val mk_tmp_dir: unit -> Dir.t
+
 (** Create a new Dir.t and resolve symlinks *)
 val concat_and_resolve: Dir.t -> string -> Dir.t
 
@@ -133,7 +138,9 @@ val read: t -> string
 
 (** Open a channel from a given file. *)
 val open_in: t -> in_channel
+val open_in_bin: t -> in_channel
 val open_out: t -> out_channel
+val open_out_bin: t -> out_channel
 
 (** Removes everything in [filename] if existed. *)
 val remove: t -> unit
@@ -163,6 +170,10 @@ val rec_files: Dir.t -> t list
 (** List all the filename. Do not recurse. *)
 val files: Dir.t -> t list
 
+(** Returns alll the files, including dangling symlinks (which means that
+    not all entries will satisfy {!exists}). *)
+val files_and_links: Dir.t -> t list
+
 (** Apply a function on the contents of a file *)
 val with_contents: (string -> 'a) -> t -> 'a
 
@@ -188,9 +199,9 @@ val is_exec: t -> bool
 (** Copy a file *)
 val copy: src:t -> dst:t -> unit
 
-(** Installs a file to a destination. Optionnally set if the destination should
+(** Installs a file to a destination. Optionally set if the destination should
     be set executable *)
-val install: ?exec:bool -> src:t -> dst:t -> unit -> unit
+val install: ?warning:OpamSystem.install_warning_fn -> ?exec:bool -> src:t -> dst:t -> unit -> unit
 
 (** Symlink a file. If symlink is not possible on the system, use copy instead.
     With [relative], creates a relative link through the closest common ancestor
@@ -211,6 +222,8 @@ val extract_job: t -> Dir.t -> exn option OpamProcess.job
 val extract_in: t -> Dir.t -> unit
 
 val extract_in_job: t -> Dir.t -> exn option OpamProcess.job
+
+val make_tar_gz_job: t -> Dir.t -> exn option OpamProcess.job
 
 (** Extract a generic file *)
 val extract_generic_file: generic_file -> Dir.t -> unit
@@ -244,6 +257,9 @@ val touch: t -> unit
 
 (** Change file permissions *)
 val chmod: t -> int -> unit
+
+(** Returns delay since last file update, based on mtime *)
+val written_since: t -> float
 
 (** Returns the closest parent of a directory (including itself) for which the
     predicate holds, if any *)
@@ -283,7 +299,7 @@ module Op: sig
 
 end
 
-(** Simple structure to hanle file attributes *)
+(** Simple structure to handle file attributes *)
 module Attribute: sig
 
   include OpamStd.ABSTRACT

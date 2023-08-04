@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -12,6 +12,9 @@
 open OpamTypes
 open OpamTypesBase
 open OpamStd.Op
+
+module OpamParser = OpamParser.FullPos
+module OpamPrinter = OpamPrinter.FullPos
 
 let log ?level fmt =
   OpamConsole.log "FILTER" ?level fmt
@@ -41,7 +44,7 @@ let to_string t =
     | FOp(e,s,f) ->
       paren ~cond:(context <> `Or && context <> `And)
         (Printf.sprintf "%s %s %s"
-           (aux ~context:`Relop e) (OpamPrinter.relop s) (aux ~context:`Relop f))
+           (aux ~context:`Relop e) (OpamPrinter.relop_kind s) (aux ~context:`Relop f))
     | FAnd (e,f) ->
       paren ~cond:(context <> `Or && context <> `And)
         (Printf.sprintf "%s & %s" (aux ~context:`And e) (aux ~context:`And f))
@@ -86,6 +89,10 @@ let string_interp_regex =
       seq [str "%{"; group (greedy notclose); opt (group (str "}%"))];
     ])
 
+let escape_value =
+  let rex = Re.(compile @@ set "\\\"") in
+  Re.Pcre.substitute ~rex ~subst:(fun s -> "\\"^s)
+
 let escape_expansions =
   Re.replace_string Re.(compile @@ char '%') ~by:"%%"
 
@@ -106,9 +113,9 @@ let string_variables s =
     let rec aux acc pos =
       try
         let ss = Re.exec ~pos string_interp_regex s in
-        if Re.test ss 2 then
-          aux (Re.get ss 1 :: acc)
-            (fst (Re.get_ofs ss 0) + String.length (Re.get ss 0))
+        if Re.Group.test ss 2 then
+          aux (Re.Group.get ss 1 :: acc)
+            (fst (Re.Group.offset ss 0) + String.length (Re.Group.get ss 0))
         else
           aux acc (pos+1)
       with Not_found -> acc
@@ -214,7 +221,7 @@ let resolve_ident ?no_undef_expand env fident =
   | None -> FUndef (FIdent fident)
 
 (* Resolves ["%{x}%"] string interpolations *)
-let expand_string ?(partial=false) ?default env text =
+let expand_string_aux ?(partial=false) ?(escape_value=fun x -> x) ?default env text =
   let default fident = match default, partial with
     | None, false -> None
     | Some df, false -> Some (df fident)
@@ -237,9 +244,11 @@ let expand_string ?(partial=false) ?default env text =
     else
     let fident = String.sub str 2 (String.length str - 4) in
     resolve_ident ~no_undef_expand:partial env (filter_ident_of_string fident)
-    |> value_string ?default:(default fident)
+    |> value_string ?default:(default fident) |> escape_value
   in
   Re.replace string_interp_regex ~f text
+
+let expand_string = expand_string_aux ?escape_value:None
 
 let unclosed_expansions text =
   let re =
@@ -400,17 +409,37 @@ let ident_bool ?default env id = value_bool ?default (resolve_ident env id)
 let expand_interpolations_in_file env file =
   let f = OpamFilename.of_basename file in
   let src = OpamFilename.add_extension f "in" in
-  let ic = OpamFilename.open_in src in
-  let oc = OpamFilename.open_out f in
-  let rec aux () =
-    match try Some (input_line ic) with End_of_file -> None with
-    | Some s ->
-      output_string oc (expand_string ~default:(fun _ -> "") env s);
-      output_char oc '\n';
-      aux ()
-    | None -> ()
+  let ic = OpamFilename.open_in_bin src in
+  let oc = OpamFilename.open_out_bin f in
+  (* Determine if the input file parses in opam-file-format *)
+  let is_opam_format =
+    try
+      let _ =
+        OpamParser.channel ic (OpamFilename.to_string src)
+      in
+      true
+    with e ->
+      OpamStd.Exn.fatal e;
+      false
   in
-  aux ();
+  (* Reset the input for processing *)
+  seek_in ic 0;
+  let default _ = "" in
+  let write = output_string oc in
+  let unquoted s = write @@ expand_string ~default env s in
+  let quoted s = write @@ expand_string_aux ~escape_value ~default env s in
+  let process =
+    if is_opam_format then
+      fun () -> OpamInterpLexer.main unquoted quoted (Lexing.from_channel ic)
+    else
+      let rec aux () =
+        match input_line ic with
+        | s -> unquoted s; output_char oc '\n'; aux ()
+        | exception End_of_file -> ()
+      in
+        aux
+  in
+  process ();
   close_in ic;
   close_out oc
 
@@ -521,11 +550,11 @@ let string_of_filtered_formula =
   let string_of_constraint =
     OpamFormula.string_of_formula (function
         | Constraint (op, FString s) ->
-          Printf.sprintf "%s \"%s\"" (OpamPrinter.relop op) s
+          Printf.sprintf "%s \"%s\"" (OpamPrinter.relop_kind op) s
         | Constraint (op, (FIdent _ as v)) ->
-          Printf.sprintf "%s %s" (OpamPrinter.relop op) (to_string v)
+          Printf.sprintf "%s %s" (OpamPrinter.relop_kind op) (to_string v)
         | Constraint (op, v) ->
-          Printf.sprintf "%s (%s)" (OpamPrinter.relop op) (to_string v)
+          Printf.sprintf "%s (%s)" (OpamPrinter.relop_kind op) (to_string v)
         | Filter f -> to_string f)
   in
   OpamFormula.string_of_formula (function
@@ -633,3 +662,16 @@ let atomise_extended =
           | Or (a, b) -> Or (aux filters a, aux filters b)
         in
         aux (FBool true) cs)
+
+let sort_filtered_formula compare ff =
+  let f = OpamFormula.sort compare ff in
+  let rec vc_sort = function
+    | Empty -> Empty
+    | Atom (n,vf) ->
+      Atom (n, (OpamStd.Option.default vf
+                  (simplify_extended_version_formula vf)))
+    | Block f -> Block (vc_sort f)
+    | And (f,f') -> And (vc_sort f, vc_sort f')
+    | Or (f,f') -> Or (vc_sort f, vc_sort f')
+  in
+  vc_sort f

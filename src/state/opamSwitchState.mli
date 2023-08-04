@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -32,16 +32,20 @@ val with_:
   [< unlocked ] global_state ->
   ('a switch_state -> 'b) -> 'b
 
-(** Creates a virtual state with all package available and nothing installed.
+(** Creates a virtual state with nothing installed.
+    Availability is computed just from the global state, and [avail_default]
+    (default [true]) controls the result when the availability can't be computed
+    due to undefined variables.
     Useful for querying and simulating actions when no switch is yet
     configured, or querying packages directly from the repos *)
 val load_virtual:
-  ?repos_list: repository_name list ->
+  ?repos_list: repository_name list -> ?avail_default: bool ->
   'a global_state -> 'b repos_state -> unlocked switch_state
 
 (** Load the switch's state file, without constructing the package maps: much
     faster than loading the full switch state *)
-val load_selections: 'a global_state -> switch -> switch_selections
+val load_selections:
+  ?lock_kind: 'a lock -> 'b global_state -> switch -> switch_selections
 
 (** Raw function to compute the availability of all packages, in [opams], given
     the switch configuration and the set of pinned packages. (The result is
@@ -51,8 +55,29 @@ val compute_available_packages:
   pinned:package_set -> opams:OpamFile.OPAM.t package_map ->
   package_set
 
+(** Raw function to compute the conflicts for all packages, given
+    the set of available packages and the corresponding opam files.
+    This is useful to populate the `u_conflicts` field when building
+    a universe manually. *)
+val get_conflicts_t:
+  (package -> OpamFilter.env) -> package_set ->
+  OpamFile.OPAM.t package_map -> formula package_map
+
+(** Infer a switch invariant from a switch state with compiler_packages and
+    roots set, using some heuristics. Useful for migration from pre-2.1 opam *)
+val infer_switch_invariant: 'a switch_state -> OpamFormula.t
+
 (** Releases any locks on the given switch_state *)
 val unlock: 'a switch_state -> unlocked switch_state
+
+(** Releases any locks on the given switch state and then ignores it.
+
+    Using [drop st] is equivalent to [ignore (unlock st)],
+    and safer than other uses of [ignore]
+    where it is not enforced by the type-system
+    that the value is unlocked before it is lost.
+*)
+val drop: 'a switch_state -> unit
 
 (** Calls the provided function, ensuring a temporary write lock on the given
     switch state *)
@@ -77,16 +102,18 @@ val opam: 'a switch_state -> package -> OpamFile.OPAM.t
     any *)
 val opam_opt: 'a switch_state -> package -> OpamFile.OPAM.t option
 
-(** Return the URL file for the given package *)
+(** Return the URL field for the given package *)
 val url: 'a switch_state -> package -> OpamFile.URL.t option
 
-(** Returns the primary URL from the URL file of the given package *)
+(** Returns the primary URL from the URL field of the given package *)
 val primary_url: 'a switch_state -> package -> url option
 
-(** Return the Descr file for the given package (or an empty descr if none) *)
+val primary_url_with_subpath: 'a switch_state -> package -> url option
+
+(** Return the descr field for the given package (or an empty descr if none) *)
 val descr: 'a switch_state -> package -> OpamFile.Descr.t
 
-(** Return the Descr file for the given package *)
+(** Return the descr field for the given package *)
 val descr_opt: 'a switch_state -> package -> OpamFile.Descr.t option
 
 (** Returns the full paths of overlay files under the files/ directory *)
@@ -133,7 +160,15 @@ val source_dir: 'a switch_state -> package -> dirname
 
 (** Returns the set of active external dependencies for the package, computed
     from the values of the system-specific variables *)
-val depexts: 'a switch_state -> package -> OpamStd.String.Set.t
+val depexts: 'a switch_state -> package -> OpamSysPkg.Set.t
+
+(** Returns required system packages of each of the given packages (elements are
+    not added to the map  if they don't have system dependencies) *)
+val depexts_status_of_packages:
+  'a switch_state -> package_set -> OpamSysPkg.status package_map
+
+(** Returns not found depexts for the package *)
+val depexts_unavailable: 'a switch_state -> package -> OpamSysPkg.Set.t option
 
 (** [conflicts_with st subset pkgs] returns all packages declared in conflict
     with at least one element of [subset] within [pkgs], through forward or
@@ -197,6 +232,19 @@ val is_switch_globally_set: 'a switch_state -> bool
 (** Returns a message about a package or version that couldn't be found *)
 val not_found_message: 'a switch_state -> atom -> string
 
+val unavailable_reason_raw:
+  'a switch_state -> name * OpamFormula.version_formula ->
+  [ `UnknownVersion
+  | `UnknownPackage
+  | `NoDefinition
+  | `Pinned of OpamPackage.t
+  | `Unavailable of string
+  | `ConflictsBase
+  | `ConflictsInvariant of string
+  | `MissingDepexts of string list
+  | `Default
+  ]
+
 (** Returns a printable explanation why a package is not currently available
     (pinned to an incompatible version, unmet [available:] constraints...).
     [default] is returned if no reason why it wouldn't be available was found
@@ -204,3 +252,13 @@ val not_found_message: 'a switch_state -> atom -> string
 val unavailable_reason:
   'a switch_state -> ?default:string -> name * OpamFormula.version_formula ->
   string
+
+(** Returns whether or not the package can be upgraded to a version tagged with avoid-version *)
+val can_upgrade_to_avoid_version : OpamPackage.Name.t -> 'a switch_state -> bool
+
+(** Handle a cache of the opam files of installed packages *)
+module Installed_cache: sig
+  type t = OpamFile.OPAM.t OpamPackage.Map.t
+  val save: OpamFilename.t -> t -> unit
+  val remove: OpamFilename.t -> unit
+end

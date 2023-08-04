@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2018 OCamlPro                                             *)
+(*    Copyright 2018-2020 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -29,6 +29,18 @@ module Char
   include module type of struct include Char end
 
   val lowercase_ascii: char -> char
+  val uppercase_ascii: char -> char
+end
+#endif
+
+module Either
+#if OCAML_VERSION >= (4, 12, 0)
+= Either
+#else
+: sig
+  type ('a, 'b) t =
+  | Left of 'a
+  | Right of 'b
 end
 #endif
 
@@ -87,6 +99,19 @@ module Filename
   include module type of struct include Filename end
 
   val extension : string -> string
+end
+#endif
+
+module Result
+#if OCAML_VERSION >= (4, 8, 0)
+= Result
+#else
+: sig
+  type ('a, 'e) t
+#if OCAML_VERSION >= (4, 3, 0)
+    = ('a, 'e) result
+#endif
+    = Ok of 'a | Error of 'e
 end
 #endif
 

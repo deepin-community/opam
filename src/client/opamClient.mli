@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -15,7 +15,9 @@
 open OpamTypes
 open OpamStateTypes
 
-(** Initialize the client to a consistent state. *)
+(** Initialize the client to a consistent state.
+    Returns the initial state and, in case a switch is to be created, its
+    initial set of packages *)
 val init:
   init_config:OpamFile.InitConfig.t ->
   interactive:bool ->
@@ -25,8 +27,9 @@ val init:
   ?update_config:bool ->
   ?env_hook:bool ->
   ?completion:bool ->
+  ?check_sandbox:bool ->
   shell ->
-  rw global_state * unlocked repos_state * formula
+  rw global_state * unlocked repos_state * atom list
 
 (* (\** Gets the initial config (opamrc) to be used *\)
  * val get_init_config:
@@ -38,9 +41,9 @@ val init:
    (defaults to [OpamInitDefaults.init_config]) for the settings that are unset,
    and updates all repositories *)
 val reinit:
-  ?init_config:OpamFile.InitConfig.t ->
-  interactive:bool ->
-  ?dot_profile:filename -> ?update_config:bool -> ?env_hook:bool -> ?completion:bool ->
+  ?init_config:OpamFile.InitConfig.t -> interactive:bool -> ?dot_profile:filename ->
+  ?update_config:bool -> ?env_hook:bool -> ?completion:bool -> ?inplace:bool ->
+  ?check_sandbox:bool -> ?bypass_checks:bool ->
   OpamFile.Config.t -> shell -> unit
 
 (** Install the given list of packages. [add_to_roots], if given, specifies that
@@ -50,14 +53,23 @@ val reinit:
 val install:
   rw switch_state ->
   ?autoupdate:atom list -> ?add_to_roots:bool -> ?deps_only:bool ->
-  ?assume_built:bool -> atom list -> rw switch_state
+  ?ignore_conflicts:bool -> ?assume_built:bool -> ?download_only:bool ->
+  ?depext_only:bool -> atom list ->
+  rw switch_state
 
 (** Low-level version of [reinstall], bypassing the package name sanitization
     and dev package update, and offering more control *)
 val install_t:
-  rw switch_state -> ?ask:bool ->
+  rw switch_state ->
+  ?ask:bool -> ?ignore_conflicts:bool -> ?depext_only:bool -> ?download_only:bool ->
   atom list -> bool option -> deps_only:bool -> assume_built:bool ->
   rw switch_state
+
+(** Check that the given list of packages [atoms] have their dependencies
+    satisfied, without calling the solver. Returns missing dependencies. *)
+val check_installed:
+  build:bool -> post:bool -> rw switch_state -> atom list ->
+  OpamPackage.Name.Set.t OpamPackage.Map.t
 
 (** Reinstall the given set of packages. *)
 val reinstall:
@@ -83,7 +95,9 @@ val update:
     versions. The specified atoms are kept installed (or newly installed after a
     confirmation). The upgrade concerns them only unless [all] is specified. *)
 val upgrade:
-  rw switch_state -> ?check:bool -> all:bool -> atom list -> rw switch_state
+  rw switch_state ->
+  ?check:bool -> ?only_installed:bool ->
+  all:bool -> atom list -> rw switch_state
 
 (** Low-level version of [upgrade], bypassing the package name sanitization and
    dev package update, and offering more control. [terse] avoids the verbose
@@ -91,6 +105,7 @@ val upgrade:
 val upgrade_t:
   ?strict_upgrade:bool -> ?auto_install:bool -> ?ask:bool -> ?check:bool ->
   ?terse:bool ->
+  ?only_installed:bool ->
   all:bool -> atom list -> rw switch_state -> rw switch_state
 
 (** Recovers from an inconsistent universe *)
@@ -108,12 +123,25 @@ module PIN: sig
   val pin:
     rw switch_state ->
     OpamPackage.Name.t ->
-    ?edit:bool -> ?version:version -> ?action:bool ->
-    [< `Source of url | `Version of version | `Dev_upstream | `None ] ->
+    ?edit:bool -> ?version:version -> ?action:bool -> ?subpath:string ->
+    ?locked:bool ->
+    [< `Source of url | `Version of version | `Dev_upstream
+    | `Source_version of version * version
+    (* the first version is the source one, the second the package one *)
+    | `None ] ->
     rw switch_state
 
   val edit:
-    rw switch_state -> ?action:bool -> ?version:version -> OpamPackage.Name.t ->
+    rw switch_state ->
+    ?action:bool -> ?version:version -> ?locked:bool ->
+    OpamPackage.Name.t ->
+    rw switch_state
+
+  val url_pins:
+    rw switch_state -> ?edit:bool -> ?action:bool -> ?locked:bool ->
+    ?pre:((name * version option * OpamFile.OPAM.t option * url * string option)
+          -> unit) ->
+    (name * version option * OpamFile.OPAM.t option * url * string option) list ->
     rw switch_state
 
   val unpin:
@@ -129,3 +157,25 @@ module PIN: sig
   val post_pin_action: rw switch_state -> package_set -> name list -> rw switch_state
 
 end
+
+
+(** {2 Auxiliary functions}
+    These functions are exposed for advanced uses by external libraries
+*)
+
+(** Orphan packages are installed but no longer available packages; we add
+    special treatment so that opam doesn't force their removal for consistency
+    reasons on any action. Returns the "fixed" state, fully orphan packages (no
+    available version of the package remaining), and orphan package versions.
+
+    Find more technical explanations in the source. *)
+val orphans:
+  ?changes:package_set -> ?transitive:bool ->
+  'a switch_state ->
+  'a switch_state * package_set * package_set
+
+(** An extended version of [orphans] that checks for conflicts between a given
+    request and the orphan packages *)
+val check_conflicts:
+  'a switch_state -> atom list ->
+  'a switch_state * package_set * package_set

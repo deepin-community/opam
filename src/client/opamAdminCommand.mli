@@ -11,6 +11,6 @@
 
 val admin_command_doc: string
 
-val admin_subcommands: (unit Cmdliner.Term.t * Cmdliner.Term.info) list
+type command = unit Cmdliner.Term.t * Cmdliner.Term.info
 
-val default_subcommand: unit Cmdliner.Term.t * Cmdliner.Term.info
+val get_cmdliner_parser: OpamCLIVersion.Sourced.t -> command * command list

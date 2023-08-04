@@ -3,7 +3,6 @@ Makefile.config
 config.log
 config.status
 src/core/opamTypes.cmti
-src/core/opamVersion.ml
 tests/fulltest.log
 tests/packages/*.tar.gz
 tests/test.log

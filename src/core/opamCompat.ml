@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2018 OCamlPro                                             *)
+(*    Copyright 2018-2020 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -29,6 +29,18 @@ struct
   include Char
 
   let lowercase_ascii = lowercase
+  let uppercase_ascii = uppercase
+end
+#endif
+
+module Either =
+#if OCAML_VERSION >= (4, 12, 0)
+  Either
+#else
+struct
+  type ('a, 'b) t =
+  | Left of 'a
+  | Right of 'b
 end
 #endif
 
@@ -107,6 +119,19 @@ struct
         String.sub fn l (String.length fn - l)
     | exception Invalid_argument _ ->
         ""
+end
+#endif
+
+module Result =
+#if OCAML_VERSION >= (4, 8, 0)
+  Result
+#else
+struct
+  type ('a, 'e) t
+#if OCAML_VERSION >= (4, 3, 0)
+    = ('a, 'e) result
+#endif
+    = Ok of 'a | Error of 'e
 end
 #endif
 

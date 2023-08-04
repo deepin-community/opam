@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2017-2018 OCamlPro                                        *)
+(*    Copyright 2017-2019 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -58,6 +58,7 @@ let get_universe ~with_test ~with_doc ~dev opams =
     u_installed_roots = OpamPackage.Set.empty;
     u_pinned = OpamPackage.Set.empty;
     u_base = OpamPackage.Set.empty;
+    u_invariant = OpamFormula.Empty;
     u_attrs = [];
     u_reinstall = OpamPackage.Set.empty;
   }
@@ -170,7 +171,7 @@ let cycle_check univ =
          *   "Number of vertices: before merge %d, after merge %d\n"
          *   count (OpamCudf.Graph.nb_vertex g); *)
         let it = ref 0 in
-        let rec extract_cycles acc rpath v g =
+        let rec extract_cycles acc seen rpath v g =
           incr it;
           let rec find_pref acc v = function
             | [] -> None
@@ -180,17 +181,19 @@ let cycle_check univ =
               else find_pref (v1::acc) v r
           in
           match find_pref [] v rpath with
-          | Some cy -> cy :: acc
+          | Some cy -> cy :: acc, seen
           | None ->
+            if OpamCudf.Set.mem v seen then acc, seen else
+            let seen = OpamCudf.Set.add v seen in
             let rpath = v::rpath in
             (* split into sub-graphs for each successor *)
             List.fold_left
-              (fun acc s -> extract_cycles acc rpath s g)
-              acc (OpamCudf.Graph.succ g v)
+              (fun (acc, seen) s -> extract_cycles acc seen rpath s g)
+              (acc, seen) (OpamCudf.Graph.succ g v)
         in
         let p0 = List.find (OpamCudf.Graph.mem_vertex g) pkgs in
-        let r = extract_cycles acc [] p0 g in
         (* OpamConsole.msg "Iterations: %d\n" !it; *)
+        let r, _seen = extract_cycles acc OpamCudf.Set.empty [] p0 g in
         node_map, r
       )
       (OpamCudf.Map.empty, []) scc
@@ -301,7 +304,7 @@ let more_restrictive_deps_than deps1 deps2 =
    can be installed with a.va1 is vb1). An aggregate should not contain more
    than one version per package name. *)
 let aggregate packages deps revdeps =
-  if OpamStd.Config.env_bool "NOAGGREGATE" = Some true then
+  if OpamClientConfig.E.noaggregate () = Some true then
     PkgSet.fold (fun nv -> PkgSetSet.add (PkgSet.singleton nv))
       packages PkgSetSet.empty
   else
@@ -402,8 +405,7 @@ let get_obsolete univ opams =
     aggregates PkgSet.empty
 
 let check ~quiet ~installability ~cycles ~obsolete ~ignore_test repo_root =
-  let repo = OpamRepositoryBackend.local repo_root in
-  let pkg_prefixes = OpamRepository.packages_with_prefixes repo in
+  let pkg_prefixes = OpamRepository.packages_with_prefixes repo_root in
   let opams =
     OpamPackage.Map.fold (fun nv prefix acc ->
         let opam_file = OpamRepositoryPath.opam repo_root prefix nv in

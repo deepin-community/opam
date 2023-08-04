@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2015 OCamlPro                                             *)
+(*    Copyright 2015-2016 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -10,6 +10,19 @@
 
 (** Configuration options for the repository lib (record, global reference,
     setter, initialisation) *)
+
+module E : sig
+  type OpamStd.Config.E.t +=
+    | CURL of string option
+    | FETCH of string option
+    | NOCHECKSUMS of bool option
+    | REQUIRECHECKSUMS of bool option
+    | RETRIES of int option
+    | VALIDATIONHOOK of string option
+
+  val curl: unit -> string option
+  val fetch: unit -> string option
+end
 
 (** Toggles parsing of the tool's output to detect errors
     (curl returns 0 on a 404) *)

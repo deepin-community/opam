@@ -16,8 +16,6 @@ OCAMLFIND_DESTDIR=$(DESTDIR)/$(OCAML_STDLIB_DIR)
 override_dh_auto_configure: .configure_stamp
 
 .configure_stamp:
-	# Upstream shipped a release tarball with the wrong version
-	sed -i 's/2\.0\.4/2.0.5/g' configure
 	./configure --prefix=/usr --libdir=$(OCAML_STDLIB_DIR) \
 		--enable-certificate-check
 	touch .configure_stamp
@@ -46,7 +44,3 @@ override_dh_auto_clean:
 override_dh_installdocs:
 	dh_installdocs -p opam --link-doc=opam-installer
 	dh_installdocs --remaining-packages
-
-.PHONY: override_dh_missing
-override_dh_missing:
-	dh_missing --fail-missing

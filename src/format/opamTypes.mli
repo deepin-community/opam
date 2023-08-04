@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -19,9 +19,9 @@ type 'a error = [
 ]
 type ('a,'b) status = [ 'a success | 'b error ]
 
-(** {2 Untyped generic file format} *)
-
-include module type of struct include OpamParserTypes end
+type ('a, 'b) either = ('a, 'b) OpamCompat.Either.t =
+  | Left of 'a
+  | Right of 'b
 
 (** {2 Filenames} *)
 
@@ -115,6 +115,8 @@ type package_flag =
   | Pkgflag_Compiler (** Package may be used for 'opam switch' *)
   | Pkgflag_Conf (** Virtual package: no source, no install or remove instructions,
                      .install, but likely has depexts *)
+  | Pkgflag_AvoidVersion (** This version of the package will only be installed if
+                             strictly required *)
   | Pkgflag_Unknown of string (** Used for error reporting, otherwise ignored *)
 
 (** At some point we want to abstract so that the same functions can be used
@@ -170,12 +172,13 @@ type trust_anchors = {
 (** Repositories *)
 type repository = {
   repo_name    : repository_name;
-  repo_root    : dirname; (** The root of opam's local mirror for this repo *)
   repo_url     : url;
   repo_trust   : trust_anchors option;
 }
 
 (** {2 Variable-based filters} *)
+
+type relop = OpamParserTypes.FullPos.relop_kind
 
 type filter =
   | FBool of bool
@@ -234,6 +237,7 @@ type 'a inst_action = [
 type 'a concrete_action = [
   | 'a atomic_action
   | `Build of 'a
+  | `Fetch of 'a
 ]
 
 type 'a action = [
@@ -252,14 +256,17 @@ type 'a cause =
   | Unknown
 
 (** Solver result *)
-type solver_result =
+type actions_result = {
+  actions_successes : package action list;
+  actions_errors : (package action * exn) list;
+  actions_aborted : package action list;
+}
+
+type solution_result =
   | Nothing_to_do
   | OK of package action list (** List of successful actions *)
   | Aborted
-  | No_solution
-  | Partial_error of package action list * package action list * package action list
-  (** List of successful actions, list of actions with errors,
-      list of remaining undone actions *)
+  | Partial_error of actions_result
 
 (** Solver result *)
 type ('a, 'b) result =
@@ -293,6 +300,7 @@ type universe = {
   u_installed_roots: package_set;
   u_pinned   : package_set;
   u_base     : package_set;
+  u_invariant: formula;
   u_reinstall: package_set;
   u_attrs    : (string * package_set) list;
 }
@@ -385,7 +393,7 @@ type stats = {
 type env = (string * string * string option) list
 
 (** Environment updates *)
-type env_update = string * env_update_op * string * string option
+type env_update = string * OpamParserTypes.FullPos.env_update_op_kind * string * string option
 (** var, update_op, value, comment *)
 
 (** Tags *)
@@ -398,3 +406,7 @@ type checksums = string list
 
 (** {2 JSON} *)
 type json = OpamJson.t
+
+type sys_package = OpamSysPkg.t
+
+type sys_pkg_status = OpamSysPkg.status

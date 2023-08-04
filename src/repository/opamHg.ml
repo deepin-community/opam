@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -37,7 +37,7 @@ module VCS = struct
     | None -> mark_prefix
     | Some fragment -> mark_prefix ^ "-" ^ fragment
 
-  let fetch ?cache_dir:_ repo_root repo_url =
+  let fetch ?cache_dir:_ ?subpath:_ repo_root repo_url =
     let src = OpamUrl.base_url repo_url in
     let rev = OpamStd.Option.default "default" repo_url.OpamUrl.hash in
     let mark = mark_from_url repo_url in
@@ -69,7 +69,7 @@ module VCS = struct
     let finalise () = OpamSystem.remove_file patch_file in
     OpamProcess.Job.catch (fun e -> finalise (); raise e) @@ fun () ->
     let mark = mark_from_url repo_url in
-    hg repo_root ~stdout:patch_file [ "diff"; "--subrepos"; "--reverse";
+    hg repo_root ~stdout:patch_file [ "diff"; "--text"; "--subrepos"; "--reverse";
         "--rev"; mark ] @@> fun r ->
     if OpamProcess.is_failure r then
       (finalise ();
@@ -111,10 +111,50 @@ module VCS = struct
             | branch::_ when branch <> "default" -> Done (Some branch)
             | _ -> Done None
 
-  let is_dirty repo_root =
+  let is_dirty ?subpath:_ repo_root =
     hg repo_root [ "status"; "--subrepos" ] @@> fun r ->
     OpamSystem.raise_on_process_error r;
     Done (r.OpamProcess.r_stdout = [])
+
+  let modified_files repo_root =
+    hg repo_root [ "status"; "--subrepos" ] @@> fun r ->
+    OpamSystem.raise_on_process_error r;
+    let files =
+      OpamStd.List.filter_map (fun line ->
+          match OpamStd.String.split line ' ' with
+          | ("A" | "M")::file::[] -> Some file
+          | _ -> None) r.OpamProcess.r_stdout
+    in
+    Done files
+
+  let get_remote_url ?hash repo_root =
+    hg repo_root [ "paths"; "default" ]
+    @@> function
+    | { OpamProcess.r_code = 0; _ } as r ->
+      (match r.r_stdout with
+       | [url] ->
+         (let url = OpamUrl.parse ~backend:`hg url in
+       if OpamUrl.local_dir url <> None then Done None else
+          let check_remote hash =
+            hg repo_root [ "id"; "-r"; hash; "default" ]
+            @@> fun r ->
+            if OpamProcess.is_success r then
+              Done (Some { url with hash = Some hash })
+              (* default branch of hg is default *)
+            else Done (Some { url with hash = None})
+          in
+          match hash with
+          | None ->
+            (hg repo_root ["branch"] @@> function
+              | { OpamProcess.r_code = 0; OpamProcess.r_stdout = [hash]; _ } ->
+                check_remote hash
+              | { OpamProcess.r_code = 0; _ }
+              | { OpamProcess.r_code = 1; _ } -> Done (Some url)
+              | r -> OpamSystem.process_error r)
+          | Some hash -> check_remote hash)
+       | _ -> Done None)
+    | { OpamProcess.r_code = 1; _ } -> Done None
+    | r -> OpamSystem.process_error r
 
 end
 

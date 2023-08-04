@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -16,7 +16,8 @@ open OpamPackage.Set.Op
 let log fmt = OpamConsole.log "SWACT" fmt
 let slog = OpamConsole.slog
 
-let gen_switch_config root ?(synopsis="") ?repos _switch =
+let gen_switch_config
+    root ?(synopsis="") ?repos ?invariant _switch =
   let vars =
     List.map (fun (s,p) -> OpamVariable.of_string s, S p) [
       ("user" ,
@@ -28,14 +29,17 @@ let gen_switch_config root ?(synopsis="") ?repos _switch =
     ]
   in
   { OpamFile.Switch_config.
-    opam_version = OpamVersion.current_nopatch;
+    opam_version = OpamFile.Switch_config.file_format_version;
     synopsis;
     variables = vars;
     paths = [];
     opam_root = Some root;
     repos;
     wrappers = OpamFile.Wrappers.empty;
-    env = []; }
+    env = [];
+    invariant;
+    depext_bypass = OpamSysPkg.Set.empty;
+  }
 
 let install_switch_config root switch config =
   log "install_switch_config switch=%a" (slog OpamSwitch.to_string) switch;
@@ -43,7 +47,7 @@ let install_switch_config root switch config =
     (OpamPath.Switch.switch_config root switch)
     config
 
-let create_empty_switch gt ?synopsis ?repos switch =
+let create_empty_switch gt ?synopsis ?repos ?invariant switch =
   log "create_empty_switch at %a" (slog OpamSwitch.to_string) switch;
   let root = gt.root in
   let switch_dir = OpamPath.Switch.root root switch in
@@ -57,7 +61,7 @@ let create_empty_switch gt ?synopsis ?repos switch =
     (* Create base directories *)
     OpamFilename.mkdir switch_dir;
 
-    let config = gen_switch_config root ?synopsis ?repos switch in
+    let config = gen_switch_config root ?synopsis ?repos ?invariant switch in
 
     OpamFilename.mkdir (OpamPath.Switch.lib_dir root switch config);
     OpamFilename.mkdir (OpamPath.Switch.stublibs root switch config);
@@ -120,27 +124,26 @@ let add_to_reinstall st ~unpinned_only packages =
     OpamFilename.remove (OpamFile.filename reinstall_file)
   else
     OpamFile.PkgList.write reinstall_file reinstall;
-  { st with reinstall = st.reinstall ++ add_reinst_packages }
+  { st with reinstall = lazy (Lazy.force st.reinstall ++ add_reinst_packages) }
 
-let set_current_switch lock gt ?rt switch =
-  if OpamSwitch.is_external switch then
+let set_current_switch gt st =
+  if OpamSwitch.is_external st.switch then
     OpamConsole.error_and_exit `Bad_arguments
       "Can not set external switch '%s' globally. To set it in the current \
        shell use:\n %s"
-      (OpamSwitch.to_string switch)
-      (OpamEnv.eval_string gt ~set_opamswitch:true (Some switch));
-  let config = OpamFile.Config.with_switch switch gt.config in
+      (OpamSwitch.to_string st.switch)
+      (OpamEnv.eval_string gt ~set_opamswitch:true (Some st.switch));
+  let config = OpamFile.Config.with_switch st.switch gt.config in
   let gt = { gt with config } in
   OpamGlobalState.write gt;
-  let rt = match rt with
-    | Some rt -> { rt with repos_global = gt }
-    | None -> OpamRepositoryState.load `Lock_none gt
-  in
-  let st = OpamSwitchState.load lock gt rt switch in
+  let rt = { st.switch_repos with repos_global = gt } in
+  let st = { st with switch_global = gt; switch_repos = rt } in
   OpamEnv.write_dynamic_init_scripts st;
   st
 
 let install_metadata st nv =
+  OpamSwitchState.Installed_cache.remove
+    (OpamPath.Switch.installed_opams_cache st.switch_global.root st.switch);
   let opam = OpamSwitchState.opam st nv in
   OpamFile.OPAM.write
     (OpamPath.Switch.installed_opam st.switch_global.root st.switch nv)
@@ -154,9 +157,13 @@ let install_metadata st nv =
       in
       OpamFilename.mkdir (OpamFilename.dirname dst);
       OpamFilename.copy ~src:f ~dst)
-    (OpamFile.OPAM.get_extra_files opam)
+    (OpamFile.OPAM.get_extra_files
+       ~repos_roots:(OpamRepositoryState.get_root st.switch_repos)
+       opam)
 
 let remove_metadata st packages =
+  OpamSwitchState.Installed_cache.remove
+    (OpamPath.Switch.installed_opams_cache st.switch_global.root st.switch);
   OpamPackage.Set.iter (fun nv ->
       OpamFilename.rmdir
         (OpamPath.Switch.installed_package_dir
@@ -167,26 +174,17 @@ let update_switch_state ?installed ?installed_roots ?reinstall ?pinned st =
   let open OpamStd.Option.Op in
   let open OpamPackage.Set.Op in
   let installed = installed +! st.installed in
-  let reinstall0 = st.reinstall in
+  let reinstall0 = Lazy.force st.reinstall in
   let reinstall = (reinstall +! reinstall0) %% installed in
   let compiler_packages =
-    if OpamPackage.Set.is_empty (st.compiler_packages -- installed) then
-      st.compiler_packages
-    else (* adjust version of installed compiler packages *)
-      let names = OpamPackage.names_of_packages st.compiler_packages in
-      let installed_base = OpamPackage.packages_of_names installed names in
-      installed_base ++
-      (* keep version of uninstalled compiler packages *)
-      OpamPackage.packages_of_names st.compiler_packages
-        (OpamPackage.Name.Set.diff names
-           (OpamPackage.names_of_packages installed_base))
+    OpamPackage.Set.filter (OpamFormula.verifies st.switch_invariant) installed
   in
   let old_selections = OpamSwitchState.selections st in
   let st =
     { st with
       installed;
       installed_roots = installed_roots +! st.installed_roots;
-      reinstall;
+      reinstall = lazy reinstall;
       pinned = pinned +! st.pinned;
       compiler_packages; }
   in
@@ -203,7 +201,7 @@ let add_to_installed st ?(root=false) nv =
   let st =
     update_switch_state st
       ~installed:(OpamPackage.Set.add nv st.installed)
-      ~reinstall:(OpamPackage.Set.remove nv st.reinstall)
+      ~reinstall:(OpamPackage.Set.remove nv (Lazy.force st.reinstall))
       ~installed_roots:
         (let roots =
            OpamPackage.Set.filter (fun nv1 -> nv1.name <> nv.name)
@@ -216,7 +214,7 @@ let add_to_installed st ?(root=false) nv =
     OpamFile.Dot_config.safe_read
       (OpamPath.Switch.config st.switch_global.root st.switch nv.name)
   in
-  let st = { st with conf_files = OpamPackage.Map.add nv conf st.conf_files } in
+  let st = { st with conf_files = OpamPackage.Name.Map.add nv.name conf st.conf_files } in
   if not OpamStateConfig.(!r.dryrun) then (
     install_metadata st nv;
     if OpamFile.OPAM.env opam <> [] &&
@@ -233,7 +231,7 @@ let remove_from_installed ?(keep_as_root=false) st nv =
       ~installed:(rm st.installed)
       ?installed_roots:(if keep_as_root then None
                         else Some (rm st.installed_roots))
-      ~reinstall:(rm st.reinstall)
+      ~reinstall:(rm (Lazy.force st.reinstall))
   in
   let has_setenv =
     match OpamStd.Option.map OpamFile.OPAM.env (OpamSwitchState.opam_opt st nv)
@@ -244,4 +242,4 @@ let remove_from_installed ?(keep_as_root=false) st nv =
   then
     (* note: don't remove_metadata just yet *)
     OpamEnv.write_dynamic_init_scripts st;
-  { st with conf_files = OpamPackage.Map.remove nv st.conf_files }
+  { st with conf_files = OpamPackage.Name.Map.remove nv.name st.conf_files }

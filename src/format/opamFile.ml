@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -19,9 +19,13 @@
     - files using the "opam syntax" and lexer, parsed using OpamFormat.Pp.V
 *)
 
+open OpamParserTypes.FullPos
 open OpamTypes
 open OpamTypesBase
 open OpamStd.Op
+
+module OpamParser = OpamParser.FullPos
+module OpamPrinter = OpamPrinter.FullPos
 
 module Pp = struct
   include OpamPp
@@ -58,6 +62,7 @@ let exists f = OpamFilename.exists (filename f)
 
 module type IO_FILE = sig
   type t
+  val format_version: OpamVersion.t
   val empty: t
   val write: 'a typed_file -> t -> unit
   val read : 'a typed_file -> t
@@ -158,14 +163,14 @@ module MakeIO (F : IO_Arg) = struct
         log ~level:2 "Cannot find %a" (slog OpamFilename.to_string) f;
         F.empty
     with
-    | Pp.Bad_format _ as e->
+    | (Pp.Bad_version _ | Pp.Bad_format _) as e->
       OpamConsole.error "%s [skipped]\n"
         (Pp.string_of_bad_format ~file:(OpamFilename.to_string f) e);
       F.empty
 
   let read_from_f f input =
     try f input with
-    | Pp.Bad_format _ as e ->
+    | (Pp.Bad_version _ | Pp.Bad_format _) as e->
       if OpamFormatConfig.(!r.strict) then
         (OpamConsole.error "%s" (Pp.string_of_bad_format e);
          OpamConsole.error_and_exit `File_error "Strict mode: aborting")
@@ -182,17 +187,19 @@ module MakeIO (F : IO_Arg) = struct
 
   let write_to_string ?(filename=dummy_file) t =
     F.to_string filename t
+
 end
 
 (** I - Raw text files (no parsing) *)
 
-(** Compiler and package description files
-    (<repo>/packages/.../descr, <repo>/compilers/.../<v>.descr):
-    one-line title and content *)
+(** Compiler and package description opam file fields: one-line title and
+    content. Formerly, (<repo>/packages/.../descr,
+    <repo>/compilers/.../<v>.descr) *)
 
 module DescrIO = struct
 
   let internal = "descr"
+  let format_version = OpamVersion.of_string "0"
 
   type t = string * string
 
@@ -277,6 +284,8 @@ module LinesBase = struct
 
   (* Lines of space separated words *)
   type t = string list list
+
+  let format_version = OpamVersion.of_string "0"
 
   let empty = []
 
@@ -380,6 +389,8 @@ module LineFile (X: LineFileArg) = struct
   module IO = struct
     include X
 
+    let format_version = OpamVersion.of_string "0"
+
     let to_channel _ oc t = Pp.print (Lines.pp_channel stdin oc -| pp) t
 
     let to_string _ t = Pp.print (Lines.pp_string -| pp) t
@@ -389,7 +400,7 @@ module LineFile (X: LineFileArg) = struct
 
     let of_string filename str =
       Pp.parse (Lines.pp_string -| pp)
-        ~pos:(OpamFilename.to_string filename,0,0)
+        ~pos:{ pos_null with filename = OpamFilename.to_string filename }
         str
   end
 
@@ -542,7 +553,7 @@ module Environment = LineFile(struct
       (OpamFormat.lines_set ~empty:[] ~add:OpamStd.List.cons ~fold:List.fold_right @@
        Pp.identity ^+
        Pp.of_pair "env_update_op"
-         (OpamLexer.env_update_op, OpamPrinter.env_update_op) ^+
+         (OpamLexer.FullPos.env_update_op, OpamPrinter.env_update_op_kind) ^+
        Pp.identity ^+
        Pp.opt Pp.singleton)
       -| Pp.pp (fun ~pos:_ -> List.rev) List.rev
@@ -711,9 +722,14 @@ module Syntax = struct
       let curr = lexbuf.Lexing.lex_curr_p in
       let start = lexbuf.Lexing.lex_start_p in
       let pos =
-        curr.Lexing.pos_fname,
-        start.Lexing.pos_lnum,
-        start.Lexing.pos_cnum - start.Lexing.pos_bol
+        { filename = curr.Lexing.pos_fname;
+          start =
+            start.Lexing.pos_lnum,
+            start.Lexing.pos_cnum - start.Lexing.pos_bol;
+          stop = (* XXX here we take current position, where error occurs as end position *) 
+            curr.Lexing.pos_lnum,
+            curr.Lexing.pos_cnum - curr.Lexing.pos_bol;
+        }
       in
       raise (OpamPp.Bad_format (Some pos, msg))
     in
@@ -760,111 +776,241 @@ module Syntax = struct
     match current_str_opt with
     | None -> to_string filename (Pp.print pp (filename, t))
     | Some str ->
-    let syn_file = of_string filename str in
-    let syn_t = Pp.print pp (filename, t) in
-    let it_ident = function
-      | Variable (_, f, _) -> `Var f
-      | Section (_, {section_kind = k; section_name = n; _}) -> `Sec (k,n)
-    in
-    let it_pos = function
-      | Section (pos,_) | Variable (pos,_,_) -> pos
-    in
-    let lines_index =
-      let rec aux acc s =
-        let until =
-          try Some (String.index_from s (List.hd acc) '\n')
-          with Not_found -> None
-        in
-        match until with
-        | Some until -> aux (until+1 :: acc) s
-        | None -> Array.of_list (List.rev acc)
+      let syn_file = of_string filename str in
+      let syn_t = Pp.print pp (filename, t) in
+      let it_ident it = match it.pelem with
+        | Variable (f, _) -> `Var f.pelem
+        | Section ({section_kind = k; section_name = n; _}) ->
+          `Sec (k.pelem, OpamStd.Option.map (fun x -> x.pelem) n)
       in
-      aux [0] str
-    in
-    let pos_index (_file, li, col) = lines_index.(li - 1) + col in
-    let field_str ident =
-      let rec aux = function
-        | it1 :: r when it_ident it1 = ident ->
-          let start = pos_index (it_pos it1) in
-          let stop = match r with
-            | it2 :: _ -> pos_index (it_pos it2) - 1
-            | [] ->
-              let len = ref (String.length str) in
-              while str.[!len - 1] = '\n' do decr len done;
-              !len
+      let lines_index =
+        let rec aux acc s =
+          let until =
+            try Some (String.index_from s (List.hd acc) '\n')
+            with Not_found -> None
           in
-          String.sub str start (stop - start)
-        | _ :: r -> aux r
-        | [] -> raise Not_found
+          match until with
+          | Some until -> aux (until+1 :: acc) s
+          | None -> Array.of_list (List.rev acc)
+        in
+        aux [0] str
       in
-      aux syn_file.file_contents
-    in
-    let rem, strs =
-      List.fold_left (fun (rem, strs) item ->
-          List.filter (fun i -> it_ident i <> it_ident item) rem,
-          match item with
-          | Variable (pos, name, v) ->
-            (try
-               let ppa = List.assoc name fields in
-               match snd (Pp.print ppa t) with
-               | None | Some (List (_, [])) | Some (List (_,[List(_,[])])) ->
-                 strs
-               | field_syn_t when
-                   field_syn_t =
-                   snd (Pp.print ppa (Pp.parse ppa ~pos (empty, Some v)))
-                 ->
-                 (* unchanged *)
-                 field_str (`Var name) :: strs
-               | _ ->
-                 try
-                   let f =
-                     List.find (fun i -> it_ident i = `Var name) syn_t.file_contents
-                   in
-                   OpamPrinter.items [f] :: strs
-                 with Not_found -> strs
-             with Not_found | OpamPp.Bad_format _ ->
-               if OpamStd.String.starts_with ~prefix:"x-" name then
-                 field_str (`Var name) :: strs
-               else strs)
-          | Section (pos, {section_kind; section_name; section_items}) ->
-            (try
-               let ppa = List.assoc section_kind sections in
-               let print_sec ppa t =
-                 match snd (Pp.print ppa t) with
-                 | None -> None
-                 | Some v ->
-                   try Some (List.assoc section_name v) with Not_found -> None
+      let pos_index (li,col) = lines_index.(li - 1) + col in
+      let extract start stop = String.sub str start (stop - start) in
+      let value_list_str lastpos vlst vlst_raw =
+        let extract_pos start stop = extract (pos_index start) (pos_index stop) in
+        let def_blank blank = OpamStd.Option.default "\n  " blank in
+        let find_split f =
+          let rec aux p = function
+            | x::r when f x -> Some (p, x, r)
+            | p::r -> aux (Some p) r
+            | [] -> None
+          in
+          aux None
+        in
+        let full_vlst_raw = vlst_raw in
+        let rec aux lastpos blank acc vlst vlst_raw =
+          match vlst, vlst_raw with
+          | v::r, vraw :: rraw when OpamPrinter.value_equals v vraw ->
+            let blank = extract lastpos (pos_index vraw.pos.start) in
+            let str = extract_pos vraw.pos.start vraw.pos.stop in
+            let new_v = blank ^ str in
+            let blank = Some blank in
+            let lastpos = pos_index vraw.pos.stop in
+            aux lastpos blank (new_v :: acc) r rraw
+          | v::r , _ ->
+            (match find_split (OpamPrinter.value_equals v) full_vlst_raw with
+             | Some (pvraw, vraw, rraw) ->
+               let str = extract_pos vraw.pos.start vraw.pos.stop in
+               let blank, lastpos =
+                 if pos_index vraw.pos.start - lastpos <= 0 then
+                   def_blank blank, lastpos
+                 else
+                   (let start = match pvraw with
+                       | Some pvraw -> pos_index pvraw.pos.stop
+                       | None -> lastpos
+                    in
+                    let stop = pos_index vraw.pos.start in
+                    extract start stop),
+                   pos_index vraw.pos.stop
                in
-               let sec_field_t = print_sec ppa t in
-               if sec_field_t <> None &&
-                  sec_field_t =
-                  print_sec ppa
-                    (Pp.parse ppa ~pos
-                       (empty, Some [section_name, section_items]))
-               then
-                 (* unchanged *)
-                 field_str (`Sec (section_kind, section_name)) :: strs
-               else
-               try
+               let new_v = blank ^ str in
+               let blank = Some blank in
+               aux lastpos blank (new_v :: acc) r rraw
+             | None ->
+               let blank, rraw, lastpos =
+                 match vlst_raw with
+                 | vraw :: rraw ->
+                   let blank = extract lastpos (pos_index vraw.pos.start) in
+                   let rraw, lastpos =
+                     if OpamStd.List.find_opt
+                         (OpamPrinter.value_equals vraw) vlst <> None then
+                       vlst_raw, lastpos
+                     else
+                       rraw, pos_index vraw.pos.stop
+                   in
+                   blank, rraw, lastpos
+                 | [] -> def_blank blank, vlst_raw, lastpos
+               in
+               let new_v = blank ^ (OpamPrinter.value v) in
+               let blank = Some blank in
+               aux lastpos blank (new_v :: acc) r rraw)
+          | [], _ ->  acc
+        in
+        aux lastpos None [] vlst vlst_raw
+      in
+      let item_var_str name field =
+        let field_raw =
+          List.find (fun i -> it_ident i = `Var name) syn_file.file_contents
+        in
+        match field.pelem with
+        | Variable (n, { pelem = List { pelem = full_vlst;_}; _})
+          when n.pelem = name ->
+          let full_vlst_raw, full_vlst_raw_pos =
+            match field_raw.pelem with
+            | Variable (_, {pelem = List vlst_raw;  pos}) -> vlst_raw.pelem, pos
+            | _ -> raise Not_found
+          in
+          (* if empty, rewrite full field *)
+          if full_vlst_raw = [] then OpamPrinter.items [field] else
+          (* aux *)
+          let item_var_str =
+            let lastpos = pos_index full_vlst_raw_pos.start +1 in
+            let final_list = value_list_str lastpos full_vlst full_vlst_raw in
+            String.concat "" (List.rev final_list)
+          in
+          let beginning =
+            let start = pos_index field_raw.pos.start in
+            let stop = pos_index full_vlst_raw_pos.start +1 in
+            extract start stop
+          in
+          let ending =
+            let start = pos_index (List.hd (List.rev full_vlst_raw)).pos.stop in
+            let stop = pos_index full_vlst_raw_pos.stop in
+            extract start stop
+          in
+          beginning ^ item_var_str ^ ending
+        | _ -> OpamPrinter.items [field]
+      in
+      (* Fields *)
+      let get_padding item lastpos =
+        let start = pos_index item.pos.start in
+        let stop = pos_index item.pos.stop in
+        let padding = extract lastpos start in
+        padding, stop
+      in
+      let field_str item lastpos strs =
+        let start = pos_index item.pos.start in
+        let padding, stop = get_padding item lastpos in
+        let field = extract start stop in
+        field :: padding :: strs, stop
+      in
+      let rem, (strs, lastpos) =
+        List.fold_left (fun (rem, (strs, lastpos)) item ->
+            List.filter (fun i -> it_ident i <> it_ident item) rem,
+            let pos = item.pos in
+            match item.pelem with
+            | Variable (name, v) ->
+              let name = name.pelem in
+              (try
+                 let ppa = List.assoc name fields in
+                 match snd (Pp.print ppa t) with
+                 | None
+                 | Some { pelem = List { pelem = []; _}; _}
+                 | Some { pelem = List
+                              { pelem = [ { pelem = List
+                                                { pelem = []; _}; _}]; _}; _} ->
+                   strs, pos_index item.pos.stop
+                 | field_syn_t when
+                     field_syn_t =
+                     snd (Pp.print ppa (Pp.parse ppa ~pos (empty, Some v)))
+                   ->
+                   (* unchanged *)
+                   field_str item lastpos strs
+                 | _ ->
+                   try
+                     let field =
+                       List.find (fun i -> it_ident i = `Var name) syn_t.file_contents
+                     in
+                     let f = item_var_str name field in
+                     let padding, stop = get_padding item lastpos in
+                     f :: padding :: strs, stop
+                   with Not_found -> strs, pos_index item.pos.stop
+               with Not_found | OpamPp.Bad_format _ ->
+                 if OpamStd.String.starts_with ~prefix:"x-" name &&
+                    OpamStd.List.find_opt (fun i -> it_ident i = `Var name)
+                      syn_t.file_contents <> None then
+                   field_str item lastpos strs
+                 else strs, pos_index item.pos.stop)
+            | Section {section_kind; section_name; section_items} ->
+              let section_kind = section_kind.pelem in
+              let section_items = section_items.pelem in
+              let section_name = OpamStd.Option.map (fun x -> x.pelem) section_name in
+              (try
+                 let ppa = List.assoc section_kind sections in
+                 let print_sec ppa t =
+                   match snd (Pp.print ppa t) with
+                   | None -> None
+                   | Some v ->
+                     try Some (List.assoc section_name v) with Not_found -> None
+                 in
+                 let sec_field_t = print_sec ppa t in
+                 if sec_field_t <> None &&
+                    sec_field_t =
+                    print_sec ppa
+                      (Pp.parse ppa ~pos
+                         (empty, Some [section_name, section_items]))
+                 then
+                   (* unchanged *)
+                   field_str item lastpos strs
+                 else
                  let f =
                    List.filter
                      (fun i -> it_ident i = `Sec (section_kind, section_name))
                      syn_t.file_contents
                  in
-                 OpamPrinter.items f :: strs
-               with Not_found -> strs
-             with Not_found | OpamPp.Bad_format _ -> strs)
-        )
-        (syn_t.file_contents, []) syn_file.file_contents
+                 let padding, stop = get_padding item lastpos in
+                 (OpamPrinter.items f :: padding :: strs), stop
+               with Not_found | OpamPp.Bad_format _ ->
+                 strs, pos_index item.pos.stop))
+          (syn_t.file_contents, ([], 0)) syn_file.file_contents
+      in
+      let str = String.concat "" (List.rev strs) in
+      let str =
+        if rem = [] then str else
+          str ^ "\n" ^ (OpamPrinter.items rem)
+      in
+      let str =
+        let last = lines_index.(Array.length lines_index -1) in
+        if last <= lastpos then str else str ^ extract lastpos last
+      in
+      str
+
+  let contents pp ?(filename=dummy_file) t =
+    Pp.print pp (filename, t)
+
+  let to_list pp ?(filename=dummy_file) t =
+    let rec aux acc pfx = function
+      | {pelem=Section ({section_kind; section_name=None; section_items});_} :: r ->
+        aux (aux acc (section_kind.pelem :: pfx) section_items.pelem) pfx r
+      | {pelem=Section ({section_kind; section_name=Some n; section_items});_} :: r ->
+        aux
+          (aux acc (Printf.sprintf "%s(%s)" section_kind.pelem n.pelem :: pfx)
+             section_items.pelem)
+          pfx r
+      | {pelem=Variable (name, value);_} :: r ->
+        aux (((name.pelem :: pfx), value) :: acc) pfx r
+      | [] -> acc
     in
-    String.concat "\n"
-      (List.rev_append strs
-         (if rem = [] then [""] else [OpamPrinter.items rem;""]))
+    List.rev_map
+      (fun (pfx, value) -> String.concat "." (List.rev pfx), value)
+      (aux [] [] (contents pp ~filename t).file_contents)
 
 end
 
 module type SyntaxFileArg = sig
   val internal: string
+  val format_version: OpamVersion.t
   type t
   val empty: t
   val pp: (opamfile, filename * t) Pp.t
@@ -875,15 +1021,24 @@ module SyntaxFile(X: SyntaxFileArg) : IO_FILE with type t := X.t = struct
   module IO = struct
     let to_opamfile filename t = Pp.print X.pp (filename, t)
 
+    let catch_future_syntax_error = function
+    | {file_contents = [{pelem = Variable({pelem = "opam-version"; _}, {pelem = String ver; _}); _ };
+                        {pelem = Section {section_kind = {pelem = "#"; _}; _}; pos}]; _}
+      when OpamVersion.(compare (nopatch (of_string ver)) (nopatch X.format_version)) <= 0 ->
+        raise (OpamPp.Bad_version (Some pos, "Parse error"))
+    | opamfile -> opamfile
+
     let of_channel filename (ic:in_channel) =
-      Pp.parse X.pp ~pos:(pos_file filename) (Syntax.of_channel filename ic)
+      let opamfile = Syntax.of_channel filename ic |> catch_future_syntax_error in
+      Pp.parse X.pp ~pos:(pos_file filename) opamfile
       |> snd
 
     let to_channel filename oc t =
       Syntax.to_channel filename oc (to_opamfile filename t)
 
     let of_string (filename:filename) str =
-      Pp.parse X.pp ~pos:(pos_file filename) (Syntax.of_string filename str)
+      let opamfile = Syntax.of_string filename str |> catch_future_syntax_error in
+      Pp.parse X.pp ~pos:(pos_file filename) opamfile
       |> snd
 
     let to_string filename t =
@@ -896,6 +1051,51 @@ module SyntaxFile(X: SyntaxFileArg) : IO_FILE with type t := X.t = struct
       include X
       include IO
     end)
+
+end
+
+(* Error less reading for forward compatibility of opam roots *)
+module type BestEffortArg = sig
+  include SyntaxFileArg
+
+  (* Version of file format, as understood by [opam-file-format] *)
+  (* This attribute can be deleted when 4.02 is ditched *)
+  [@@@ocaml.warning "-32"]
+  val file_format_version: OpamVersion.t [@@ocaml.warning "-32"]
+
+  (* Construct the syntax pp, under some conditions. If [condition] is given,
+     it is passed to [OpamFormat.show_erros] call, for error display
+     conditions, default is to display it as a warning. If [f] is given, it is
+     passed to [OpamFormat.check_opam_version] call, it is the check function,
+     default is to check regarding [file_format_version]. *)
+  val pp_cond:
+    ?f:(OpamVersion.t -> bool) -> ?condition:(t -> bool) -> unit ->
+    (opamfile, filename * t) Pp.t
+end
+
+module type BestEffortRead = sig
+  type t
+  val read: t typed_file -> t
+  val read_opt: t typed_file -> t option
+  val safe_read: t typed_file -> t
+  val read_from_channel: ?filename:t typed_file -> in_channel -> t
+  val read_from_string: ?filename:t typed_file -> string -> t
+end
+
+module MakeBestEffort (S: BestEffortArg) : BestEffortRead
+  with type t := S.t = struct
+  module ES = struct
+    include S
+    let pp =
+      pp_cond
+        (* to read newer oapm root with newer `opam-version` field, we need to
+           be less strict on the check_opam_version
+           ~f:(fun _ -> true)
+        *)
+        ~condition:(fun _ -> false) ()
+  end
+  include ES
+  include SyntaxFile(ES)
 end
 
 (** (1) Internal files *)
@@ -1028,13 +1228,19 @@ end
 module ConfigSyntax = struct
 
   let internal = "config"
+  let format_version = OpamVersion.of_string "2.1"
+  let file_format_version = OpamVersion.of_string "2.0"
+  let root_version = OpamVersion.of_string "2.1"
+
+  let default_old_root_version = OpamVersion.of_string "2.1~~previous"
 
   type t = {
     opam_version : opam_version;
+    opam_root_version: opam_version;
     repositories : repository_name list;
     installed_switches : switch list;
     switch : switch option;
-    jobs : int;
+    jobs : int option;
     dl_tool : arg list option;
     dl_jobs : int;
     dl_cache : url list option;
@@ -1046,9 +1252,18 @@ module ConfigSyntax = struct
     eval_variables : (variable * string list * string) list;
     validation_hook : arg list option;
     default_compiler : formula;
+    default_invariant : formula;
+    depext: bool;
+    depext_run_installs : bool;
+    depext_cannot_install : bool;
+    depext_bypass: OpamSysPkg.Set.t;
   }
 
   let opam_version t = t.opam_version
+  let opam_root_version t = t.opam_root_version
+  let opam_root_version_opt t =
+    if OpamVersion.compare t.opam_root_version default_old_root_version = 0 then
+      None else Some t.opam_root_version
   let repositories t = t.repositories
   let installed_switches t = t.installed_switches
   let switch t = t.switch
@@ -1069,14 +1284,23 @@ module ConfigSyntax = struct
 
   let validation_hook t = t.validation_hook
   let default_compiler t = t.default_compiler
+  let default_invariant t = t.default_invariant
+
+  let depext t = t.depext
+  let depext_run_installs t = t.depext_run_installs
+  let depext_cannot_install t = t.depext_cannot_install
+  let depext_bypass t = t.depext_bypass
+
 
   let with_opam_version opam_version t = { t with opam_version }
+  let with_opam_root_version opam_root_version t = { t with opam_root_version }
   let with_repositories repositories t = { t with repositories }
   let with_installed_switches installed_switches t =
     { t with installed_switches }
   let with_switch_opt switch t = { t with switch }
   let with_switch switch t = { t with switch = Some switch }
-  let with_jobs jobs t = { t with jobs }
+  let with_jobs jobs t = { t with jobs = Some jobs}
+  let with_jobs_opt jobs t = { t with jobs }
   let with_dl_tool dl_tool t = { t with dl_tool = Some dl_tool }
   let with_dl_tool_opt dl_tool t = { t with dl_tool }
   let with_dl_jobs dl_jobs t = { t with dl_jobs }
@@ -1086,8 +1310,9 @@ module ConfigSyntax = struct
     { t with solver_criteria =
                (kind,criterion)::List.remove_assoc kind t.solver_criteria }
   let with_best_effort_prefix s t = { t with best_effort_prefix = Some s }
+  let with_best_effort_prefix_opt s t = { t with best_effort_prefix = s }
   let with_solver solver t = { t with solver = Some solver }
-  let with_solver_opt solver t = { t with solver = solver }
+  let with_solver_opt solver t = { t with solver }
   let with_wrappers wrappers t = { t with wrappers }
   let with_global_variables global_variables t = { t with global_variables }
   let with_eval_variables eval_variables t = { t with eval_variables }
@@ -1095,13 +1320,21 @@ module ConfigSyntax = struct
     { t with validation_hook = Some validation_hook}
   let with_validation_hook_opt validation_hook t = { t with validation_hook }
   let with_default_compiler default_compiler t = { t with default_compiler }
+  let with_default_invariant default_invariant t = { t with default_invariant }
+  let with_depext depext t = { t with depext }
+  let with_depext_run_installs depext_run_installs t =
+    { t with depext_run_installs }
+  let with_depext_cannot_install depext_cannot_install t =
+    { t with depext_cannot_install }
+  let with_depext_bypass depext_bypass t = { t with depext_bypass }
 
   let empty = {
-    opam_version = OpamVersion.current_nopatch;
+    opam_version = file_format_version;
+    opam_root_version = default_old_root_version;
     repositories = [];
     installed_switches = [];
     switch = None;
-    jobs = 1;
+    jobs = None;
     dl_tool = None;
     dl_jobs = 1;
     dl_cache = None;
@@ -1113,8 +1346,18 @@ module ConfigSyntax = struct
     eval_variables = [];
     validation_hook = None;
     default_compiler = OpamFormula.Empty;
+    default_invariant = OpamFormula.Empty;
+    depext = true;
+    depext_run_installs = true;
+    depext_cannot_install = false;
+    depext_bypass = OpamSysPkg.Set.empty;
   }
 
+  (* When adding a field, make sure to add it in
+     [OpamConfigCommand.global_allowed_fields] if it is a user modifiable field.
+     When creating sections, make sure to update
+     [OpamConfigCommand.global_allowed_sections] and
+     [OpamConfigCommand.get_scope]. *)
   let fields =
     let with_switch sw t =
       if t.switch = None then with_switch sw t
@@ -1123,6 +1366,9 @@ module ConfigSyntax = struct
     [
       "opam-version", Pp.ppacc
         with_opam_version opam_version
+        (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion));
+      "opam-root-version", Pp.ppacc
+        with_opam_root_version opam_root_version
         (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion));
       "repositories", Pp.ppacc
         with_repositories repositories
@@ -1137,7 +1383,7 @@ module ConfigSyntax = struct
       "switch", Pp.ppacc_opt
         with_switch switch
         (Pp.V.string -| Pp.of_module "switch" (module OpamSwitch));
-      "jobs", Pp.ppacc
+      "jobs", Pp.ppacc_opt
         with_jobs jobs
         Pp.V.pos_int;
       "download-command", Pp.ppacc_opt
@@ -1184,6 +1430,23 @@ module ConfigSyntax = struct
       "default-compiler", Pp.ppacc
         with_default_compiler default_compiler
         (Pp.V.package_formula `Disj Pp.V.(constraints Pp.V.version));
+      "default-invariant", Pp.ppacc
+        with_default_invariant default_invariant
+        (Pp.V.package_formula `Conj Pp.V.(constraints Pp.V.version));
+      "depext", Pp.ppacc
+        with_depext depext
+        Pp.V.bool;
+      "depext-run-installs", Pp.ppacc
+        with_depext_run_installs depext_run_installs
+        Pp.V.bool;
+      "depext-cannot-install", Pp.ppacc
+        with_depext_cannot_install depext_cannot_install
+        Pp.V.bool;
+      "depext-bypass", Pp.ppacc
+        with_depext_bypass depext_bypass
+        (Pp.V.map_list
+           (Pp.V.string -| Pp.of_module "sys-package" (module OpamSysPkg)) -|
+         Pp.of_pair "System package set" OpamSysPkg.Set.(of_list, elements));
 
       (* deprecated fields *)
       "alias", Pp.ppacc_opt
@@ -1195,32 +1458,54 @@ module ConfigSyntax = struct
       "cores", Pp.ppacc_opt
         with_jobs OpamStd.Option.none
         Pp.V.pos_int;
-      "system_ocaml-version", Pp.ppacc_ignore;
       "system-ocaml-version", Pp.ppacc_ignore;
     ] @
     List.map
       (fun (fld, ppacc) -> fld, Pp.embed with_wrappers wrappers ppacc)
       Wrappers.fields
 
-  let pp =
+  let pp_cond ?f ?condition () =
     let name = internal in
+    let format_version = file_format_version in
     Pp.I.map_file @@
+    Pp.I.check_opam_version ?f ~format_version () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.fields ~name ~empty fields -|
-    Pp.I.show_errors ~name ~strict:OpamCoreConfig.(not !r.safe_mode) ()
+    Pp.I.show_errors ~name ?condition ()
 
+  let pp = pp_cond ()
+
+  let to_list = Syntax.to_list pp
 end
+
 module Config = struct
   include ConfigSyntax
   include SyntaxFile(ConfigSyntax)
+
+  module BestEffort = MakeBestEffort(ConfigSyntax)
+
+  let raw_root_version f =
+    try
+      let opamfile = OpamParser.file (OpamFilename.to_string (filename f)) in
+      Some (OpamStd.List.find_map (function
+          | { pelem = Variable ({ pelem = "opam-root-version"; _},
+                                {pelem = String version; _}); _} ->
+            Some (OpamVersion.of_string version)
+          | _ -> None)
+        opamfile.file_contents)
+    with
+    | Sys_error _ | Not_found -> None
 end
 
 module InitConfigSyntax = struct
   let internal = "init-config"
+  let format_version = OpamVersion.of_string "2.0"
 
   type t = {
     opam_version : opam_version;
     repositories : (repository_name * (url * trust_anchors option)) list;
     default_compiler : formula;
+    default_invariant : formula;
     jobs : int option;
     dl_tool : arg list option;
     dl_jobs : int option;
@@ -1238,6 +1523,7 @@ module InitConfigSyntax = struct
   let opam_version t = t.opam_version
   let repositories t = t.repositories
   let default_compiler t = t.default_compiler
+  let default_invariant t = t.default_invariant
   let jobs t = t.jobs
   let dl_tool t = t.dl_tool
   let dl_jobs t = t.dl_jobs
@@ -1254,6 +1540,7 @@ module InitConfigSyntax = struct
   let with_opam_version opam_version t = {t with opam_version}
   let with_repositories repositories t = {t with repositories}
   let with_default_compiler default_compiler t = {t with default_compiler}
+  let with_default_invariant default_invariant t = {t with default_invariant}
   let with_jobs jobs t = {t with jobs}
   let with_dl_tool dl_tool t = {t with dl_tool}
   let with_dl_jobs dl_jobs t = {t with dl_jobs}
@@ -1276,9 +1563,10 @@ module InitConfigSyntax = struct
                (kind,criterion)::List.remove_assoc kind t.solver_criteria }
 
   let empty = {
-    opam_version = OpamVersion.current_nopatch;
+    opam_version = format_version;
     repositories = [];
     default_compiler = OpamFormula.Empty;
+    default_invariant = OpamFormula.Empty;
     jobs = None;
     dl_tool = None;
     dl_jobs = None;
@@ -1326,6 +1614,9 @@ module InitConfigSyntax = struct
            (fun (name, (url, ta)) -> (name, Some url, ta)));
       "default-compiler", Pp.ppacc
         with_default_compiler default_compiler
+        (Pp.V.package_formula `Disj Pp.V.(constraints Pp.V.version));
+      "default-invariant", Pp.ppacc
+        with_default_invariant default_invariant
         (Pp.V.package_formula `Disj Pp.V.(constraints Pp.V.version));
       "jobs", Pp.ppacc_opt
         (with_jobs @* OpamStd.Option.some) jobs
@@ -1396,6 +1687,7 @@ module InitConfigSyntax = struct
   let pp =
     let name = internal in
     Pp.I.map_file @@
+    Pp.I.check_opam_version ~optional:true ~format_version () -|
     Pp.I.fields ~name ~empty fields -|
     Pp.I.show_errors ~name ~strict:true ()
 
@@ -1408,6 +1700,9 @@ module InitConfigSyntax = struct
       default_compiler =
         if t2.default_compiler <> Empty
         then t2.default_compiler else t1.default_compiler;
+      default_invariant =
+        if t2.default_invariant <> Empty
+        then t2.default_invariant else t1.default_invariant;
       jobs = opt t2.jobs t1.jobs;
       dl_tool = opt t2.dl_tool t1.dl_tool;
       dl_jobs = opt t2.dl_jobs t1.dl_jobs;
@@ -1436,6 +1731,8 @@ end
 module Repos_configSyntax = struct
 
   let internal = "repos-config"
+  let format_version = OpamVersion.of_string "2.0"
+  let file_format_version = OpamVersion.of_string "2.0"
 
   type t = ((url * trust_anchors option) option) OpamRepositoryName.Map.t
 
@@ -1457,21 +1754,30 @@ module Repos_configSyntax = struct
          OpamRepositoryName.Map.(of_list, bindings));
   ]
 
-  let pp =
+  let pp_cond ?f ?condition () =
     let name = internal in
+    let format_version = file_format_version in
     Pp.I.map_file @@
+    Pp.I.check_opam_version ~optional:true ?f ~format_version () -|
+    Pp.I.opam_version ~format_version ~undefined:true () -|
     Pp.I.fields ~name ~empty fields -|
-    Pp.I.show_errors ~name ()
+    Pp.I.show_errors ~name ?condition ()
+
+  let pp = pp_cond ()
 
 end
 module Repos_config = struct
   include Repos_configSyntax
   include SyntaxFile(Repos_configSyntax)
+  module BestEffort = MakeBestEffort(Repos_configSyntax)
 end
 
 module Switch_configSyntax = struct
 
   let internal = "switch-config"
+  let format_version = OpamVersion.of_string "2.1"
+  let file_format_version = OpamVersion.of_string "2.0"
+  let oldest_compatible_format_version = OpamVersion.of_string "2.0"
 
   type t = {
     opam_version: OpamVersion.t;
@@ -1482,10 +1788,12 @@ module Switch_configSyntax = struct
     opam_root: dirname option;
     wrappers: Wrappers.t;
     env: env_update list;
+    invariant: OpamFormula.t option;
+    depext_bypass: OpamSysPkg.Set.t;
   }
 
   let empty = {
-    opam_version = OpamVersion.current_nopatch;
+    opam_version = file_format_version;
     synopsis = "";
     repos = None;
     paths = [];
@@ -1493,8 +1801,14 @@ module Switch_configSyntax = struct
     opam_root = None;
     wrappers = Wrappers.empty;
     env = [];
+    invariant = None;
+    depext_bypass = OpamSysPkg.Set.empty;
   }
 
+  (* When adding a field or section, make sure to add it in
+     [OpamConfigCommand.switch_allowed_fields] and
+     [OpamConfigCommand.switch_allowed_sections] if it is a user modifiable
+     field *)
   let sections = [
     "paths", Pp.ppacc
       (fun paths t -> {t with paths}) (fun t -> t.paths)
@@ -1529,17 +1843,31 @@ module Switch_configSyntax = struct
     "setenv", Pp.ppacc
       (fun env t -> {t with env}) (fun t -> t.env)
       (Pp.V.map_list ~depth:2 Pp.V.env_binding);
+    "invariant", Pp.ppacc_opt
+      (fun inv t -> {t with invariant = Some inv }) (fun t -> t.invariant)
+      (Pp.V.package_formula `Conj Pp.V.(constraints version));
+    "depext-bypass", Pp.ppacc
+      (fun depext_bypass t -> { t with depext_bypass})
+      (fun t -> t.depext_bypass)
+      (Pp.V.map_list
+         (Pp.V.string -| Pp.of_module "sys-package" (module OpamSysPkg)) -|
+       Pp.of_pair "System package set" OpamSysPkg.Set.(of_list, elements));
   ] @
     List.map
       (fun (fld, ppacc) ->
          fld, Pp.embed (fun wrappers t -> {t with wrappers}) (fun t -> t.wrappers) ppacc)
       Wrappers.fields
 
-  let pp =
+  let pp_cond ?f ?condition () =
     let name = internal in
+    let format_version = file_format_version in
     Pp.I.map_file @@
+    Pp.I.check_opam_version ?f ~format_version () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.fields ~name ~empty ~sections fields -|
-    Pp.I.show_errors ~name ()
+    Pp.I.show_errors ~name ?condition ()
+
+  let pp = pp_cond ()
 
   let variable t s =
     try Some (List.assoc s t.variables)
@@ -1551,15 +1879,20 @@ module Switch_configSyntax = struct
 
   let wrappers t = t.wrappers
 
+  let to_list = Syntax.to_list pp
 end
+
 module Switch_config = struct
   include Switch_configSyntax
   include SyntaxFile(Switch_configSyntax)
+  module BestEffort = MakeBestEffort(Switch_configSyntax)
 end
 
 module SwitchSelectionsSyntax = struct
 
   let internal = "switch-state"
+  let format_version = OpamVersion.of_string "2.0"
+  let file_format_version = OpamVersion.of_string "2.0"
 
   type t = switch_selections
 
@@ -1579,7 +1912,7 @@ module SwitchSelectionsSyntax = struct
 
   let fields = [
     "opam-version", Pp.ppacc
-      (fun _ t -> t) (fun _ -> OpamVersion.current_nopatch)
+      (fun _ t -> t) (fun _ -> file_format_version)
       (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion));
     "compiler", Pp.ppacc
       (fun sel_compiler t -> {t with sel_compiler}) (fun t -> t.sel_compiler)
@@ -1604,18 +1937,23 @@ module SwitchSelectionsSyntax = struct
        Pp.of_pair "Package set" OpamPackage.Set.(of_list, elements))
   ]
 
-  let pp =
+  let pp_cond ?f ?condition () =
     let name = "switch-state" in
+    let format_version = file_format_version in
     Pp.I.map_file @@
-    Pp.I.check_opam_version () -|
+    Pp.I.check_opam_version ~optional:true ?f ~format_version () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.fields ~name ~empty fields -|
-    Pp.I.show_errors ~name ()
+    Pp.I.show_errors ~name ?condition ()
+
+  let pp = pp_cond ()
 
 end
 
 module SwitchSelections = struct
   type t = switch_selections
   include SyntaxFile(SwitchSelectionsSyntax)
+  module BestEffort = MakeBestEffort(SwitchSelectionsSyntax)
 end
 
 (** Local repository config file (repo/<repo>/config) *)
@@ -1623,6 +1961,7 @@ end
 module Repo_config_legacySyntax = struct
 
   let internal = "repo-file"
+  let format_version = OpamVersion.of_string "1.2"
 
   type t = {
     repo_name : repository_name;
@@ -1686,6 +2025,7 @@ end
 module Dot_configSyntax = struct
 
   let internal = ".config"
+  let format_version = OpamVersion.of_string "2.0"
 
   type t = {
     vars: (variable * variable_contents) list;
@@ -1719,7 +2059,7 @@ module Dot_configSyntax = struct
           (Pp.I.anonymous_section pp_variables)
       ]
       [
-        "opam-version", Pp.ppacc (fun _ t -> t) (fun _ -> OpamVersion.current)
+        "opam-version", Pp.ppacc (fun _ t -> t) (fun _ -> format_version)
           (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion));
         "file-depends", Pp.ppacc with_file_depends file_depends
           (Pp.V.map_list ~depth:2 @@ Pp.V.map_pair
@@ -1732,6 +2072,8 @@ module Dot_configSyntax = struct
      backwards-compat, when opam-version is unset or too old *)
   let pp =
     Pp.I.map_file @@
+    Pp.I.check_opam_version ~format_version ~optional:true () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.field "opam-version"
       (Pp.parse
          (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion)))
@@ -1775,6 +2117,7 @@ end
 module RepoSyntax = struct
 
   let internal = "repo"
+  let format_version = OpamVersion.of_string "2.0"
 
   type t = {
     opam_version : OpamVersion.t option;
@@ -1840,10 +2183,13 @@ module RepoSyntax = struct
   let pp =
     let name = internal in
     Pp.I.map_file @@
+    Pp.I.check_opam_version ~format_version ~optional:true () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.fields ~name ~empty fields -|
     Pp.I.show_errors ~name
       ~condition:(function
-          | {opam_version = Some v; _} -> OpamVersion.(compare current v) >= 0
+          | {opam_version = Some v; _} ->
+            OpamVersion.(compare format_version v) >= 0
           | _ -> true)
       ()
 
@@ -1854,22 +2200,25 @@ module Repo = struct
 end
 
 
-(** Package url files (<repo>/packages/.../url) *)
+(** Package url field in opam file. Formerly, file
+    (<repo>/packages/.../url) *)
 
 module URLSyntax = struct
 
   let internal = "url-file"
+  let format_version = OpamVersion.of_string "1.2"
 
   type t = {
     url     : url;
     mirrors : url list;
     checksum: OpamHash.t list;
     errors  : (string * Pp.bad_format) list;
+    subpath : string option;
   }
 
-  let create ?(mirrors=[]) ?(checksum=[]) url =
+  let create ?(mirrors=[]) ?(checksum=[]) ?subpath url =
     {
-      url; mirrors; checksum; errors = [];
+      url; mirrors; checksum; errors = []; subpath;
     }
 
   let empty = {
@@ -1877,15 +2226,19 @@ module URLSyntax = struct
     mirrors = [];
     checksum= [];
     errors  = [];
+    subpath = None;
   }
 
   let url t = t.url
   let mirrors t = t.mirrors
   let checksum t = t.checksum
+  let subpath t = t.subpath
 
   let with_url url t = { t with url }
   let with_mirrors mirrors t = { t with mirrors }
   let with_checksum checksum t = { t with checksum = checksum }
+  let with_subpath subpath t = { t with subpath = Some subpath }
+  let with_subpath_opt subpath t = { t with subpath = subpath }
 
   let fields =
     let with_url url t =
@@ -1912,6 +2265,9 @@ module URLSyntax = struct
            (Pp.V.string -| Pp.of_module "checksum" (module OpamHash)));
       "mirrors", Pp.ppacc with_mirrors mirrors
         (Pp.V.map_list ~depth:1 Pp.V.url);
+      "subpath", Pp.ppacc_opt
+        with_subpath subpath
+        Pp.V.string;
     ]
 
   let pp_contents =
@@ -1939,6 +2295,7 @@ end
 module OPAMSyntax = struct
 
   let internal = "opam"
+  let format_version = OpamVersion.of_string "2.0"
 
   type t = {
     opam_version: opam_version;
@@ -1972,7 +2329,7 @@ module OPAMSyntax = struct
     (* User-facing data used by opam *)
     messages   : (string * filter option) list;
     post_messages: (string * filter option) list;
-    depexts    : (string list * filter) list;
+    depexts    : (OpamSysPkg.Set.t * filter) list;
     libraries  : (string * filter option) list;
     syntax     : (string * filter option) list;
     dev_repo   : url option;
@@ -1988,7 +2345,7 @@ module OPAMSyntax = struct
     bug_reports: string list;
 
     (* Extension fields (x-foo: "bar") *)
-    extensions : (pos * value) OpamStd.String.Map.t;
+    extensions : value OpamStd.String.Map.t;
 
     (* Extra sections *)
     url        : URL.t option;
@@ -1998,7 +2355,7 @@ module OPAMSyntax = struct
 
     (* Related metadata directory (not an actual field of the file)
        This can be used to locate e.g. the files/ overlays *)
-    metadata_dir: dirname option;
+    metadata_dir: (repository_name option * string) option;
 
     (* Names and hashes of the files below files/ *)
     extra_files: (OpamFilename.Base.t * OpamHash.t) list option;
@@ -2015,7 +2372,7 @@ module OPAMSyntax = struct
   }
 
   let empty = {
-    opam_version = OpamVersion.current_nopatch;
+    opam_version = format_version;
 
     name       = None;
     version    = None;
@@ -2078,8 +2435,13 @@ module OPAMSyntax = struct
   let check t name = function
     | None ->
       let pos =
-        OpamStd.Option.Op.(OpamFilename.Op.(
-            t.metadata_dir >>| fun d -> pos_file (d // "opam")))
+        OpamStd.Option.Op.(>>|) t.metadata_dir @@ function
+        | Some r, rel ->
+          { pos_null with
+            filename =
+              Printf.sprintf "<%s>/%s/opam" (OpamRepositoryName.to_string r) rel }
+        | None, d ->
+          pos_file OpamFilename.Op.(OpamFilename.Dir.of_string d // "opam")
       in
       Pp.bad_format ?pos "Field '%s:' is required" name
     | Some n -> n
@@ -2141,13 +2503,13 @@ module OPAMSyntax = struct
   let doc t = t.doc
   let bug_reports t = t.bug_reports
 
-  let extensions t = OpamStd.String.Map.map snd t.extensions
+  let extensions t = t.extensions
   let extended t fld parse =
     if not (is_ext_field fld) then invalid_arg "OpamFile.OPAM.extended";
     try
-      let pos, s = OpamStd.String.Map.find fld t.extensions in
+      let s = OpamStd.String.Map.find fld t.extensions in
       (try Some (parse s) with
-       | Pp.Bad_format _ as e -> raise (Pp.add_pos pos e))
+       | Pp.Bad_format _ as e -> raise (Pp.add_pos s.pos e))
     with Not_found -> None
 
   let url t = t.url
@@ -2221,11 +2583,14 @@ module OPAMSyntax = struct
     if not (OpamStd.String.Map.for_all (fun k _ -> is_ext_field k) extensions)
     then invalid_arg "OpamFile.OPAM.with_extensions";
     {t with
-     extensions = OpamStd.String.Map.map (fun s -> pos_null, s) extensions }
+     extensions = extensions }
   let add_extension t fld syn =
     if not (is_ext_field fld) then invalid_arg "OpamFile.OPAM.add_extension";
     {t with
-     extensions = OpamStd.String.Map.add fld (pos_null,syn) t.extensions }
+     extensions = OpamStd.String.Map.add fld syn t.extensions }
+  let remove_extension t fld =
+    if not (is_ext_field fld) then invalid_arg "OpamFile.OPAM.remove_extension";
+    {t with extensions = OpamStd.String.Map.remove fld t.extensions }
 
   let with_url url t =
     let format_errors =
@@ -2260,6 +2625,64 @@ module OPAMSyntax = struct
     { t with ocaml_version = Some ocaml_version }
   let with_os os t = { t with os }
 
+  (* Adds an opam constraint as an 'available' constraint, without restricting
+     the file format compatibility *)
+  let pp_minimal_opam_version min_version =
+    let opam_version_var = OpamVariable.of_string "opam-version" in
+    let add_avail_constr t =
+      if OpamVersion.compare t.opam_version min_version >= 0 then t else
+      let available =
+        let opam_restricted =
+          OpamFilter.fold_down_left (fun acc filter ->
+              acc ||
+              match filter with
+              | FOp (FIdent ([], var, None), (`Eq|`Geq), FString version)
+              | FOp (FString version, (`Eq|`Leq), FIdent ([], var, None)) ->
+                var = opam_version_var &&
+                OpamVersion.(compare (of_string version) min_version) >= 0
+              | _ -> false)
+            false t.available
+        in
+        if opam_restricted then t.available else
+        let opam_restriction =
+          FOp (FIdent ([], opam_version_var, None), `Geq,
+               FString (OpamVersion.to_string min_version))
+        in
+        match t.available with
+        | FBool true -> opam_restriction
+        | available -> FAnd (available, opam_restriction)
+      in
+      { t with available }
+    in
+    let parse ~pos:_ t =
+      add_avail_constr t
+      (* This is not strictly needed since we know the constraint will be
+         verified for the running opam version, but avoids a discrepency if
+         re-parsing a printed file. *)
+    in
+    let print t =
+      (* remove constraints that are already implied by the file format
+         version *)
+      let available =
+        OpamFilter.map_up (function
+            | FOp (FIdent ([], var, None), (`Eq|`Geq), FString version)
+            | FOp (FString version, (`Eq|`Leq), FIdent ([], var, None))
+              when var = opam_version_var &&
+                   OpamVersion.compare (OpamVersion.of_string version)
+                     t.opam_version <= 0
+              -> FBool true
+            | FAnd (FBool true, f) | FAnd (f, FBool true) -> f
+            | FOr (FBool true, _) | FOr (_, FBool true) -> FBool true
+            | f -> f
+          )
+          t.available
+      in
+      add_avail_constr { t with available }
+      (* The constraint needs to be added here as well, in case the file was
+         just generated and has a subpath without the constraint already *)
+    in
+    Pp.pp parse print
+
   (* Post-processing functions used for some fields (optional, because we
      don't want them when linting). It's better to do them in the same pass
      as parsing, because it allows one to get file positions, which we lose
@@ -2271,24 +2694,6 @@ module OPAMSyntax = struct
     if OpamStd.String.starts_with ~prefix tag then
       Some (pkg_flag_of_string (OpamStd.String.remove_prefix ~prefix tag))
     else None
-
-  let cleanup_name _opam_version ~pos:(file,_,_ as pos) name =
-    match OpamPackage.of_filename (OpamFilename.of_string file) with
-    | Some nv when nv.OpamPackage.name <> name ->
-      Pp.warn ~pos "This file is for package '%s' but its 'name:' field \
-                    advertises '%s'."
-        (OpamPackage.name_to_string nv) (OpamPackage.Name.to_string name);
-      nv.OpamPackage.name
-    | _ -> name
-
-  let cleanup_version _opam_version ~pos:(file,_,_ as pos) version =
-    match OpamPackage.of_filename (OpamFilename.of_string file) with
-    | Some nv when nv.OpamPackage.version <> version ->
-      Pp.warn ~pos "This file is for version '%s' but its 'version:' field \
-                    advertises '%s'."
-        (OpamPackage.version_to_string nv) (OpamPackage.Version.to_string version);
-      nv.OpamPackage.version
-    | _ -> version
 
   let cleanup_depopts opam_version ~pos depopts =
     if OpamFormatConfig.(!r.skip_version_checks) ||
@@ -2377,10 +2782,9 @@ module OPAMSyntax = struct
     [
       "opam-version", no_cleanup Pp.ppacc with_opam_version opam_version
         (Pp.V.string -| Pp.of_module "opam-version" (module OpamVersion));
-      "name", with_cleanup cleanup_name Pp.ppacc_opt with_name name_opt
+      "name", no_cleanup Pp.ppacc_opt with_name name_opt
         Pp.V.pkgname;
-      "version", with_cleanup cleanup_version
-        Pp.ppacc_opt with_version version_opt
+      "version", no_cleanup Pp.ppacc_opt with_version version_opt
         (Pp.V.string_tr -| Pp.of_module "version" (module OpamPackage.Version));
 
       "synopsis", no_cleanup Pp.ppacc_opt with_synopsis synopsis
@@ -2444,7 +2848,7 @@ module OPAMSyntax = struct
       "build-env", no_cleanup Pp.ppacc with_build_env build_env
         (Pp.V.map_list ~depth:2 Pp.V.env_binding);
       "features", no_cleanup Pp.ppacc with_features features
-        (Pp.V.map_list ~depth:2 @@
+        (Pp.V.map_list ~depth:1 @@
          Pp.V.map_options_2
            (Pp.V.ident -| Pp.of_module "variable" (module OpamVariable))
            (Pp.V.package_formula_items `Conj Pp.V.(filtered_constraints ext_version))
@@ -2457,20 +2861,25 @@ module OPAMSyntax = struct
         (Pp.V.map_list ~depth:1 @@
          Pp.V.map_option Pp.V.string_tr (Pp.opt Pp.V.filter));
       "depexts", no_cleanup Pp.ppacc with_depexts depexts
-        (Pp.fallback
+        (let map_syspkg =
+           (Pp.V.map_list
+              (Pp.V.string -| Pp.of_module "sys-package" (module OpamSysPkg))
+            -| Pp.pp (fun ~pos:_ -> OpamSysPkg.Set.of_list) OpamSysPkg.Set.elements)
+         in
+         Pp.fallback
            (Pp.V.map_list ~depth:2 @@
-            Pp.V.map_option (Pp.V.map_list Pp.V.string) (Pp.V.filter))
+            Pp.V.map_option map_syspkg (Pp.V.filter))
            (Pp.V.map_list ~depth:3
               (let rec filter_of_taglist = function
-                 | [] -> FBool true
-                 | [v] -> FString v
-                 | v :: r -> FAnd (FString v, filter_of_taglist r)
+                  | [] -> FBool true
+                  | [v] -> FString v
+                  | v :: r -> FAnd (FString v, filter_of_taglist r)
                in
                Pp.V.map_pair
                  (Pp.V.map_list Pp.V.string -|
                   Pp.of_pair "tag-list"
                     (filter_of_taglist, fun _ -> assert false))
-                 (Pp.V.map_list Pp.V.string) -|
+                 map_syspkg -|
                Pp.pp (fun ~pos:_ (a,b) -> b,a) (fun (b,a) -> a,b))));
       "libraries", no_cleanup Pp.ppacc with_libraries libraries
         (Pp.V.map_list ~depth:1 @@
@@ -2481,12 +2890,13 @@ module OPAMSyntax = struct
       "dev-repo", with_cleanup cleanup_dev_repo Pp.ppacc_opt with_dev_repo dev_repo
         (Pp.V.string -|
          Pp.of_pair "vc-url"
-           OpamUrl.(parse ?backend:None ~handle_suffix:false, to_string));
+           OpamUrl.(parse ?backend:None ~handle_suffix:false ~from_file:true,
+                    to_string));
       "pin-depends", no_cleanup Pp.ppacc with_pin_depends pin_depends
         (OpamFormat.V.map_list ~depth:2
            (OpamFormat.V.map_pair
               (OpamFormat.V.string -|
-               OpamPp.of_module "package" (module OpamPackage))
+               OpamPp.of_module "versioned package" (module OpamPackage))
               (OpamFormat.V.string -|
                OpamPp.of_module "URL" (module OpamUrl))));
 
@@ -2629,19 +3039,59 @@ module OPAMSyntax = struct
     in
     Pp.pp parse (fun x -> x)
 
+  let handle_subpath_2_0 =
+    let subpath_xfield = "x-subpath" in
+    let pp_constraint =
+      pp_minimal_opam_version (OpamVersion.of_string "2.1")
+    in
+    let parse ~pos t =
+      if OpamVersion.(compare t.opam_version (of_string "2.0") > 0) then t
+      else
+      match OpamStd.String.Map.find_opt subpath_xfield t.extensions with
+      | Some {pelem = String subpath;_} ->
+        let url = match t.url with
+          | Some u -> Some (URL.with_subpath subpath u)
+          | None -> None
+        in
+        { t with url }
+        |> Pp.parse ~pos pp_constraint
+      | Some {pos;_} ->
+        Pp.bad_format ~pos "Field %s must be a string"
+          (OpamConsole.colorise `underline subpath_xfield)
+      | None -> t
+    in
+    let print t =
+      match t.url with
+      | Some ({ URL.subpath = Some sb ; _ } as url) ->
+        if OpamVersion.(compare t.opam_version (of_string "2.0") > 0) then t
+        else
+          add_extension t subpath_xfield (nullify_pos @@ String sb)
+          |> with_url (URL.with_subpath_opt None url)
+          |> Pp.print pp_constraint
+      | _ -> t
+    in
+    Pp.pp parse print
+
   (* Doesn't handle package name encoded in directory name *)
   let pp_raw_fields =
-    Pp.I.check_opam_version () -|
-    Pp.I.partition_fields is_ext_field -| Pp.map_pair
-      (Pp.I.items -|
-       OpamStd.String.Map.(Pp.pp (fun ~pos:_ -> of_list) bindings))
+    Pp.I.check_opam_version ~format_version () -|
+    Pp.I.opam_version ~format_version () -|
+    Pp.I.partition_fields ~section:true (is_ext_field @> not) -| Pp.map_pair
       (Pp.I.fields ~name:"opam-file" ~empty ~sections fields -|
        Pp.I.on_errors (fun t e -> {t with format_errors=e::t.format_errors}) -|
        handle_flags_in_tags -|
-       handle_deprecated_available) -|
+       handle_deprecated_available)
+      (Pp.I.items -|
+       OpamStd.String.Map.(Pp.pp (fun ~pos:_ -> of_list) bindings)) -|
     Pp.pp
-      (fun ~pos:_ (extensions, t) -> with_extensions extensions t)
-      (fun t -> extensions t, t)
+      (fun ~pos:_ (t, extensions) -> with_extensions extensions t)
+      (fun t -> t, extensions t) -|
+    Pp.check (fun t ->
+        OpamVersion.(compare t.opam_version (of_string "2.0") > 0) ||
+        OpamStd.Option.Op.(t.url >>= URL.subpath) = None)
+      ~errmsg:"The url.subpath field is not allowed in files with \
+               `opam-version` <= 2.0" -|
+    handle_subpath_2_0
 
   let pp_raw = Pp.I.map_file @@ pp_raw_fields
 
@@ -2651,12 +3101,26 @@ module OPAMSyntax = struct
       (fun ~pos:_ (filename, t) ->
          filename,
          let metadata_dir =
-           if filename <> dummy_file then Some (OpamFilename.dirname filename)
+           if filename <> dummy_file
+           then Some (None, OpamFilename.(Dir.to_string (dirname filename)))
            else None
          in
          let t = { t with metadata_dir } in
          match OpamPackage.of_filename filename with
-         | Some nv -> with_nv nv t
+         | Some nv ->
+           if t.name <> None && t.name <> Some nv.name ||
+              t.version <> None && t.version <> Some nv.version
+           then
+             Pp.warn
+               "This file is for package '%s' but has mismatching fields%s%s."
+               (OpamPackage.to_string nv)
+               (OpamStd.Option.to_string
+                  (fun n -> " 'name:"^OpamPackage.Name.to_string n)
+                  t.name)
+               (OpamStd.Option.to_string
+                  (fun v -> " 'version:"^OpamPackage.Version.to_string v)
+                  t.version);
+           with_nv nv t
          | None -> t)
       (fun (filename, t) ->
          filename,
@@ -2680,7 +3144,8 @@ module OPAMSyntax = struct
                   (OpamStd.Option.default (nv.OpamPackage.name) t.name)
                   (OpamStd.Option.default (nv.OpamPackage.version) t.version))
                (OpamFilename.prettify filename);
-           {t with name = None; version = None})
+           {t with name = None; version = None}
+      )
 
   let to_string_with_preserved_format
       ?format_from ?format_from_string filename t =
@@ -2690,28 +3155,15 @@ module OPAMSyntax = struct
 
   let write_with_preserved_format
       ?format_from ?format_from_string filename t =
-    let s = to_string_with_preserved_format ?format_from ?format_from_string filename t in
+    let s =
+      to_string_with_preserved_format ?format_from ?format_from_string
+        filename t
+    in
     OpamFilename.write filename s
 
-  let contents ?(filename=dummy_file) t =
-    Pp.print pp (filename, t)
+  let contents = Syntax.contents pp
 
-  let to_list ?filename t =
-    let rec aux acc pfx = function
-      | Section (_, {section_kind; section_name=None; section_items}) :: r ->
-        aux (aux acc (section_kind :: pfx) section_items) pfx r
-      | Section (_, {section_kind; section_name=Some n; section_items}) :: r ->
-        aux
-          (aux acc (Printf.sprintf "%s(%s)" section_kind n :: pfx)
-             section_items)
-          pfx r
-      | Variable (_, name, value) :: r ->
-        aux (((name :: pfx), value) :: acc) pfx r
-      | [] -> acc
-    in
-    List.rev_map
-      (fun (pfx, value) -> String.concat "." (List.rev pfx), value)
-      (aux [] [] (contents ?filename t).file_contents)
+  let to_list = Syntax.to_list pp
 
   let print_field_as_syntax field t =
     let field = try List.assoc field alias_fields with Not_found -> field in
@@ -2719,17 +3171,15 @@ module OPAMSyntax = struct
     match OpamStd.String.cut_at field '.' with
     | None ->
       if is_ext_field field
-      then
-        OpamStd.Option.map snd
-          (OpamStd.String.Map.find_opt field t.extensions)
+      then OpamStd.String.Map.find_opt field t.extensions
       else snd (Pp.print (List.assoc field fields) t)
     | Some (sec, field) ->
       match snd (Pp.print (List.assoc sec sections) t) with
       | None -> None
       | Some items ->
         (* /!\ returns only the first result for multiple named sections *)
-        Some (OpamStd.List.find_map (function
-            | Variable (_, f, contents) when f = field -> Some contents
+        Some (OpamStd.List.find_map (fun i -> match i.pelem with
+            | Variable (f, contents) when f.pelem = field -> Some contents
             | _ -> None)
             (List.flatten (List.map snd items)))
 
@@ -2752,7 +3202,17 @@ module OPAM = struct
       conflicts  = t.conflicts;
       conflict_class = t.conflict_class;
       available  = t.available;
-      flags      = t.flags;
+      flags      =
+        (List.filter (function
+             | Pkgflag_LightUninstall
+             | Pkgflag_Verbose
+             | Pkgflag_Plugin
+             | Pkgflag_Compiler
+             | Pkgflag_Conf
+             | Pkgflag_AvoidVersion
+             | Pkgflag_Unknown _
+               -> false)
+            t.flags);
       env        = t.env;
 
       build      = t.build;
@@ -2811,9 +3271,17 @@ module OPAM = struct
   let equal o1 o2 =
     with_metadata_dir None o1 = with_metadata_dir None o2
 
-  let get_extra_files o =
+  let get_metadata_dir ~repos_roots o =
+      match metadata_dir o with
+      | None -> None
+      | Some (None, abs) ->
+        Some (OpamFilename.Dir.of_string abs)
+      | Some (Some r, rel) ->
+        Some OpamFilename.Op.(repos_roots r / rel)
+
+  let get_extra_files ~repos_roots o =
     OpamStd.Option.Op.(
-      (metadata_dir o >>= fun mdir ->
+      (get_metadata_dir ~repos_roots o >>= fun mdir ->
        let files_dir = OpamFilename.Op.(mdir / "files") in
        extra_files o >>| List.map @@ fun (basename, hash) ->
        OpamFilename.create files_dir basename,
@@ -2831,8 +3299,12 @@ module OPAM = struct
              (OpamPackage.to_string (OpamPackage.create n v))
          | _, _, Some f, _ ->
            Printf.sprintf " at %s" (to_string f)
-         | _, _, _, Some dir ->
-           Printf.sprintf " in %s" (OpamFilename.Dir.to_string dir)
+         | _, _, _, Some (None, dir) ->
+           Printf.sprintf " in %s" dir
+         | _, _, _, Some (Some repo, dir) ->
+           Printf.sprintf " %s from repository %s"
+             (Filename.concat dir "opam")
+             (OpamRepositoryName.to_string repo)
          | _ -> "")
         (OpamStd.Format.itemize
            (fun (_, bf) -> Pp.string_of_bad_format (OpamPp.Bad_format bf))
@@ -2850,6 +3322,7 @@ end
 module Dot_installSyntax = struct
 
   let internal = ".install"
+  let format_version = OpamVersion.of_string "2.0"
 
   type t =  {
     bin     : (basename optional * basename option) list;
@@ -2996,7 +3469,8 @@ module Dot_installSyntax = struct
   let pp =
     let name = internal in
     Pp.I.map_file @@
-    Pp.I.check_opam_version ~optional:true () -|
+    Pp.I.check_opam_version ~optional:true ~format_version () -|
+    Pp.I.opam_version ~format_version ~undefined:true () -|
     Pp.I.fields ~name ~empty fields -|
     Pp.I.show_errors ~name () -|
     Pp.check ~errmsg:"man file without destination or recognised suffix"
@@ -3015,6 +3489,7 @@ end
 
 module ChangesSyntax = struct
   let internal = "changes"
+  let format_version = OpamVersion.of_string "2.0"
 
   open OpamDirTrack
 
@@ -3063,6 +3538,8 @@ module ChangesSyntax = struct
   ]
 
   let pp_contents =
+    Pp.I.check_opam_version ~format_version ~optional:true () -|
+    Pp.I.opam_version ~format_version ~undefined:true () -|
     Pp.I.fields ~name:internal ~empty fields -|
     Pp.I.show_errors ~name:internal ()
 
@@ -3077,30 +3554,47 @@ end
 module SwitchExportSyntax = struct
 
   let internal = "switch-export"
+  let format_version = OpamVersion.of_string "2.1"
 
   type t = {
     selections: switch_selections;
+    extra_files: string OpamHash.Map.t;
     overlays: OPAM.t OpamPackage.Name.Map.t;
   }
 
   let empty = {
     selections = SwitchSelectionsSyntax.empty;
+    extra_files = OpamHash.Map.empty;
     overlays = OpamPackage.Name.Map.empty;
   }
 
-  let fields = SwitchSelectionsSyntax.fields
+
+  let fields =
+    [ "extra-files", Pp.ppacc (fun extra_files t -> { t with extra_files })
+        (fun t -> t.extra_files)
+        ((Pp.V.map_list ~depth:2 @@
+          (Pp.V.map_pair
+             (Pp.V.string -| Pp.of_module "checksum" (module OpamHash))
+             Pp.V.string)) -|
+         Pp.of_pair "HashMap" OpamHash.Map.(of_list, bindings))
+    ] @
+    List.map
+      (fun (fld, ppacc) ->
+         fld, Pp.embed (fun selections t -> { t with selections })
+           (fun t -> t.selections) ppacc)
+      SwitchSelectionsSyntax.fields
 
   let pp =
     let name = "export-file" in
     Pp.I.map_file @@
-    Pp.I.check_opam_version () -|
-    Pp.I.partition (function
-        | Section (_, { section_kind="package"; section_name=Some _; _ }) ->
+    Pp.I.check_opam_version ~format_version () -|
+    Pp.I.opam_version ~format_version ~undefined:true () -|
+    Pp.I.partition (fun i -> match i.pelem with
+        | Section ({ section_kind={pelem="package";_}; section_name=Some _; _ }) ->
           false
         | _ -> true) -|
     Pp.map_pair
-      (Pp.I.fields ~name
-         ~empty:SwitchSelectionsSyntax.empty fields -|
+      (Pp.I.fields ~name ~empty fields -|
        Pp.I.show_errors ~name ())
       (Pp.map_list
          (Pp.I.section "package" -|
@@ -3118,14 +3612,15 @@ module SwitchExportSyntax = struct
        Pp.of_pair "package-metadata-map"
          OpamPackage.Name.Map.(of_list,bindings)) -|
     Pp.pp
-      (fun ~pos:_ (selections, overlays) -> {selections; overlays})
-      (fun {selections; overlays} -> (selections, overlays))
+      (fun ~pos:_ (t, overlays) -> {t with overlays})
+      (fun t -> t, t.overlays)
 
 end
 
 module SwitchExport = struct
   type t = SwitchExportSyntax.t = {
     selections: switch_selections;
+    extra_files: string OpamHash.Map.t;
     overlays: OPAM.t OpamPackage.Name.Map.t;
   }
 
@@ -3136,6 +3631,7 @@ end
 module CompSyntax = struct
 
   let internal = "comp"
+  let format_version = OpamVersion.of_string "1.2"
 
   type compiler = string
   type compiler_version = string
@@ -3156,7 +3652,7 @@ module CompSyntax = struct
   }
 
   let empty = {
-    opam_version = OpamVersion.current;
+    opam_version = format_version;
     name         = "<none>";
     version      = "<none>";
     src          = None;
@@ -3271,7 +3767,8 @@ module CompSyntax = struct
   let pp_raw =
     let name = internal in
     Pp.I.map_file @@
-    Pp.I.check_opam_version () -|
+    Pp.I.check_opam_version ~format_version () -|
+    Pp.I.opam_version ~format_version () -|
     Pp.I.fields ~name ~empty fields -|
     Pp.I.show_errors ~name () -|
     Pp.check ~errmsg:"fields 'build:' and 'configure:'+'make:' are mutually \

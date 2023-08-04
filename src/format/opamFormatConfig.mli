@@ -1,12 +1,19 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2015 OCamlPro                                             *)
+(*    Copyright 2015-2016 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
 (*  exception on linking described in the file LICENSE.                   *)
 (*                                                                        *)
 (**************************************************************************)
+
+module E : sig
+  type OpamStd.Config.E.t +=
+    | ALLPARENS of bool option
+    | SKIPVERSIONCHECKS of bool option
+    | STRICT of bool option
+end
 
 (** Configuration options for the format lib (record, global reference and
     setter) *)

@@ -1,12 +1,60 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2015 OCamlPro                                             *)
+(*    Copyright 2015-2020 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
 (*  exception on linking described in the file LICENSE.                   *)
 (*                                                                        *)
 (**************************************************************************)
+
+module E = struct
+
+  type OpamStd.Config.E.t +=
+    | ASSUMEDEPEXTS of bool option
+    | AUTOREMOVE of bool option
+    | CLI of string option
+    | DROPWORKINGDIR of bool option
+    | EDITOR of string option
+    | FAKE of bool option
+    | IGNOREPINDEPENDS of bool option
+    | INPLACEBUILD of bool option
+    | JSON of string option
+    | KEEPBUILDDIR of bool option
+    | NOAGGREGATE of bool option
+    | NOAUTOUPGRADE of bool option
+    | NOSELFUPGRADE of string option
+    | PINKINDAUTO of bool option
+    | REUSEBUILDDIR of bool option
+    | ROOTISOK of bool option
+    | SHOW of bool option
+    | SKIPUPDATE of bool option
+    | STATS of bool option
+    | WORKINGDIR of bool option
+
+  open OpamStd.Config.E
+  let assumedepexts = value (function ASSUMEDEPEXTS b -> b | _ -> None)
+  let autoremove = value (function AUTOREMOVE b -> b | _ -> None)
+  let cli = value (function CLI s -> s | _ -> None)
+  let dropworkingdir = value (function DROPWORKINGDIR b -> b | _ -> None)
+  let editor = value (function EDITOR s -> s | _ -> None)
+  let fake = value (function FAKE b -> b | _ -> None)
+  let ignorepindepends = value (function IGNOREPINDEPENDS b -> b | _ -> None)
+  let inplacebuild = value (function INPLACEBUILD b -> b | _ -> None)
+  let json = value (function JSON s -> s | _ -> None)
+  let keepbuilddir = value (function KEEPBUILDDIR b -> b | _ -> None)
+  let noaggregate = value (function NOAGGREGATE b -> b | _ -> None)
+  let noautoupgrade = value (function NOAUTOUPGRADE b -> b | _ -> None)
+  let noselfupgrade = value (function NOSELFUPGRADE s -> s | _ -> None)
+  let pinkindauto = value (function PINKINDAUTO b -> b | _ -> None)
+  let reusebuilddir = value (function REUSEBUILDDIR b -> b | _ -> None)
+  let rootisok = value (function ROOTISOK b -> b | _ -> None)
+  let show = value (function SHOW b -> b | _ -> None)
+  let skipupdate = value (function SKIPUPDATE b -> b | _ -> None)
+  let stats = value (function STATS b -> b | _ -> None)
+  let workingdir = value (function WORKINGDIR b -> b | _ -> None)
+
+end
 
 type t = {
   print_stats: bool;
@@ -17,6 +65,7 @@ type t = {
   reuse_build_dir: bool;
   inplace_build: bool;
   working_dir: bool;
+  drop_working_dir: bool;
   ignore_pin_depends: bool;
   show: bool;
   fake: bool;
@@ -24,6 +73,9 @@ type t = {
   json_out: string option;
   root_is_ok: bool;
   no_auto_upgrade: bool;
+  assume_depexts: bool;
+  cli: OpamCLIVersion.t;
+  scrubbed_environment_variables: string list;
 }
 
 let default = {
@@ -35,6 +87,7 @@ let default = {
   reuse_build_dir = false;
   inplace_build = false;
   working_dir = false;
+  drop_working_dir = false;
   ignore_pin_depends = false;
   show = false;
   fake = false;
@@ -42,6 +95,9 @@ let default = {
   json_out = None;
   root_is_ok = false;
   no_auto_upgrade = false;
+  assume_depexts = false;
+  cli = OpamCLIVersion.current;
+  scrubbed_environment_variables = [];
 }
 
 type 'a options_fun =
@@ -53,6 +109,7 @@ type 'a options_fun =
   ?reuse_build_dir:bool ->
   ?inplace_build:bool ->
   ?working_dir:bool ->
+  ?drop_working_dir:bool ->
   ?ignore_pin_depends:bool ->
   ?show:bool ->
   ?fake:bool ->
@@ -60,6 +117,9 @@ type 'a options_fun =
   ?json_out:string option ->
   ?root_is_ok:bool ->
   ?no_auto_upgrade:bool ->
+  ?assume_depexts:bool ->
+  ?cli:OpamCLIVersion.t ->
+  ?scrubbed_environment_variables:string list ->
   'a
 
 let setk k t
@@ -71,6 +131,7 @@ let setk k t
     ?reuse_build_dir
     ?inplace_build
     ?working_dir
+    ?drop_working_dir
     ?ignore_pin_depends
     ?show
     ?fake
@@ -78,6 +139,9 @@ let setk k t
     ?json_out
     ?root_is_ok
     ?no_auto_upgrade
+    ?assume_depexts
+    ?cli
+    ?scrubbed_environment_variables
   =
   let (+) x opt = match opt with Some x -> x | None -> x in
   k {
@@ -89,6 +153,7 @@ let setk k t
     reuse_build_dir = t.reuse_build_dir + reuse_build_dir;
     inplace_build = t.inplace_build + inplace_build;
     working_dir = t.working_dir + working_dir;
+    drop_working_dir = t.drop_working_dir + drop_working_dir;
     ignore_pin_depends = t.ignore_pin_depends + ignore_pin_depends;
     show = t.show + show;
     fake = t.fake + fake;
@@ -96,6 +161,9 @@ let setk k t
     json_out = t.json_out + json_out;
     root_is_ok = t.root_is_ok + root_is_ok;
     no_auto_upgrade = t.no_auto_upgrade + no_auto_upgrade;
+    assume_depexts = t.assume_depexts + assume_depexts;
+    cli = t.cli + cli;
+    scrubbed_environment_variables = t.scrubbed_environment_variables + scrubbed_environment_variables
   }
 
 let set t = setk (fun x () -> x) t
@@ -105,27 +173,31 @@ let r = ref default
 let update ?noop:_ = setk (fun cfg () -> r := cfg) !r
 
 let initk k =
-  let open OpamStd.Config in
   let open OpamStd.Option.Op in
+  Random.self_init ();
   let editor =
-    env_string "EDITOR" ++ OpamStd.Env.(getopt "VISUAL" ++ getopt "EDITOR")
+    E.editor () ++ OpamStd.Env.(getopt "VISUAL" ++ getopt "EDITOR")
   in
   setk (setk (fun c -> r := c; k)) !r
-    ?print_stats:(env_bool "STATS")
-    ?pin_kind_auto:(env_bool "PINKINDAUTO")
-    ?autoremove:(env_bool "AUTOREMOVE")
+    ?print_stats:(E.stats ())
+    ?pin_kind_auto:(E.pinkindauto ())
+    ?autoremove:(E.autoremove ())
     ?editor
-    ?keep_build_dir:(env_bool "KEEPBUILDDIR")
-    ?reuse_build_dir:(env_bool "REUSEBUILDDIR")
-    ?inplace_build:(env_bool "INPLACEBUILD")
-    ?working_dir:(env_bool "WORKINGDIR")
-    ?ignore_pin_depends:(env_bool "IGNOREPINDEPENDS")
-    ?show:(env_bool "SHOW")
-    ?fake:(env_bool "FAKE")
-    ?skip_dev_update:(env_bool "SKIPUPDATE")
-    ?json_out:(env_string "JSON" >>| function "" -> None | s -> Some s)
-    ?root_is_ok:(env_bool "ROOTISOK")
-    ?no_auto_upgrade:(env_bool "NOAUTOUPGRADE")
+    ?keep_build_dir:(E.keepbuilddir ())
+    ?reuse_build_dir:(E.reusebuilddir ())
+    ?inplace_build:(E.inplacebuild ())
+    ?working_dir:(E.workingdir ())
+    ?drop_working_dir:(E.dropworkingdir ())
+    ?ignore_pin_depends:(E.ignorepindepends ())
+    ?show:(E.show ())
+    ?fake:(E.fake ())
+    ?skip_dev_update:(E.skipupdate ())
+    ?json_out:(E.json () >>| function "" -> None | s -> Some s)
+    ?root_is_ok:(E.rootisok ())
+    ?no_auto_upgrade:(E.noautoupgrade ())
+    ?assume_depexts:(E.assumedepexts ())
+    ?cli:None
+    ?scrubbed_environment_variables:None
 
 let init ?noop:_ = initk (fun () -> ())
 
@@ -133,7 +205,7 @@ let search_files = ["findlib"]
 
 open OpamStd.Op
 
-let opam_init ?root_dir ?strict =
+let opam_init ?root_dir ?strict ?solver =
   let open OpamStd.Option.Op in
 
   (* (i) get root dir *)
@@ -143,11 +215,19 @@ let opam_init ?root_dir ?strict =
   (* the init for OpamFormat is done in advance since (a) it has an effect on
      loading the global config (b) the global config has no effect on it *)
   OpamFormatConfig.initk ?strict @@ fun ?log_dir ->
-  let config = OpamStateConfig.load_defaults root in
+  let config = OpamStateConfig.load_defaults ~lock_kind:`Lock_read root in
   let initialised = config <> None in
   (* !X fixme: don't drop the loaded config file to reload it afterwards (when
      loading the global_state) like that... *)
 
+  let solver =
+    if solver = None && OpamSolverConfig.E.externalsolver () = None then
+      (* fixme: in order to not revert config file solver value, we need to
+         check it here *)
+      (config >>= OpamFile.Config.solver >>|
+       fun s -> lazy (OpamCudfSolver.custom_solver s))
+    else solver
+  in
   begin match config with
     | None -> ()
     | Some conf ->
@@ -156,25 +236,30 @@ let opam_init ?root_dir ?strict =
         try Some (List.assoc kind c) with Not_found -> None
       in
       OpamSolverConfig.update
-        ?solver:(OpamFile.Config.solver conf >>|
-                 fun s -> lazy(OpamCudfSolver.custom_solver s))
+        ?solver
         ?solver_preferences_default:(criteria `Default >>| fun s-> lazy(Some s))
         ?solver_preferences_upgrade:(criteria `Upgrade >>| fun s-> lazy(Some s))
         ?solver_preferences_fixup:(criteria `Fixup >>| fun s -> lazy (Some s))
         ?solver_preferences_best_effort_prefix:
           (OpamFile.Config.best_effort_prefix conf >>| fun s -> lazy (Some s))
+        ();
+      OpamStateConfig.update
         ()
   end;
 
   (* (iii) load from env and options using OpamXxxConfig.init *)
   let log_dir =
+    OpamStd.Option.map OpamFilename.Dir.to_string @@
     if log_dir = None && initialised
-    then Some OpamFilename.(Dir.to_string (OpamPath.log root))
-    else None
+       && OpamCoreConfig.E.logs () = None then
+      (* fixme: in order to not revert [OPAMLOGS] value,
+         we need to check it here *)
+      Some (OpamPath.log root)
+    else log_dir
   in
   (fun () -> ()) |>
-  OpamStd.Config.initk ?log_dir |>
+  OpamCoreConfig.initk ?log_dir |>
   OpamRepositoryConfig.initk |>
-  OpamSolverConfig.initk |>
+  OpamSolverConfig.initk ?solver |>
   OpamStateConfig.initk ~root_dir:root |>
   initk

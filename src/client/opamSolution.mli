@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -27,21 +27,23 @@ val resolve:
 (** Apply a solution returned by the solver. If [ask] is not specified, prompts
     the user whenever the solution isn't obvious from the request. [add_roots]
     defaults to the set of newly installed packages that are part of
-    [requested]. *)
+    [requested].  If [force_remove] is true, modified files are not kept.*)
 val apply:
   ?ask:bool ->
   rw switch_state ->
-  user_action ->
   requested:OpamPackage.Name.Set.t ->
   ?add_roots:OpamPackage.Name.Set.t ->
   ?assume_built:bool ->
+  ?download_only:bool ->
+  ?force_remove:bool ->
   OpamSolver.solution ->
-  rw switch_state * solver_result
+  rw switch_state * solution_result
 
 (** Call the solver to get a solution and then call [apply]. If [ask] is not
     specified, prompts the user whenever the solution isn't obvious from the
     request. [add_roots] defaults to the set of newly installed packages that
-    are part of [requested]. *)
+    are part of [requested]. If [force_remove] is true, modified files are
+    not kept. *)
 val resolve_and_apply:
   ?ask:bool ->
   rw switch_state ->
@@ -51,20 +53,32 @@ val resolve_and_apply:
   requested:OpamPackage.Name.Set.t ->
   ?add_roots:OpamPackage.Name.Set.t ->
   ?assume_built:bool ->
+  ?download_only:bool ->
+  ?force_remove:bool ->
   atom request ->
-  rw switch_state * solver_result
+  rw switch_state * (solution_result, OpamCudf.conflict) result
 
 (** Raise an error if no solution is found or in case of error. Unless [quiet]
     is set, print a message indicating that nothing was done on an empty
     solution. *)
-val check_solution: ?quiet:bool -> 'a switch_state -> solver_result -> unit
+val check_solution:
+  ?quiet:bool -> 'a switch_state ->
+  (solution_result, 'conflict) result ->
+  unit
+
+(* Install external dependencies of the given package set, according the depext
+   configuration. If [confirm] is false, install commands are directly
+   launched, without asking user (used by the `--depext-only` option). If
+   [force_depext] is true, it overrides [OpamFile.Config.depext] value. *)
+val install_depexts:
+  ?force_depext:bool -> ?confirm:bool -> rw switch_state -> package_set -> rw switch_state
 
 (** {2 Atoms} *)
 
 (** Return an atom with a strict version constraint *)
 val eq_atom: name -> version -> atom
 
-(** Return a simple atom, with no version constrain, from a package*)
+(** Return a simple atom, with no version constraint, from a package*)
 val atom_of_package: package -> atom
 
 (** Returns an atom with a strict version constraint from a package *)

@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -16,6 +16,8 @@ exception Process_error of OpamProcess.result
 
 exception Command_not_found of string
 
+exception Permission_denied of string
+
 (** raise [Process_error] *)
 val process_error: OpamProcess.result -> 'a
 
@@ -29,8 +31,12 @@ exception Internal_error of string
 (** Raise [Internal_error] *)
 val internal_error: ('a, unit, string, 'b) format4 -> 'a
 
-(** [with_tmp_dir fn] executes [fn] in a tempory directory *)
+(** [with_tmp_dir fn] executes [fn] creates a temporary directory and
+    passes its name to [fn]. The directory is alwasy removed on completion. *)
 val with_tmp_dir: (string -> 'a) -> 'a
+
+(** [in_tmp_dir fn] executes [fn] in a temporary directory. *)
+val in_tmp_dir: (unit -> 'a) -> 'a
 
 (** Runs a job with a temp dir that is cleaned up afterwards *)
 val with_tmp_dir_job: (string -> 'a OpamProcess.job) -> 'a OpamProcess.job
@@ -38,6 +44,8 @@ val with_tmp_dir_job: (string -> 'a OpamProcess.job) -> 'a OpamProcess.job
 (** Returns true if the default verbose level for base commands (cp, mv, etc.)
     is reached *)
 val verbose_for_base_commands: unit -> bool
+
+(** {2 Filesystem management} *)
 
 (** Returns a directory name, in the temporary directory, composed by {i opam}
     (if [prefix] is not set), pid, and random number. *)
@@ -54,10 +62,24 @@ val copy_dir: string -> string -> unit
 
 val mv: string -> string -> unit
 
+type install_warning = [ `Add_exe          (* [.exe] had to be added *)
+                       | `Install_dll      (* Installation of [.dll] to bin/libexec *)
+                       | `Install_script   (* Installation of script on Windows *)
+                       | `Install_unknown  (* Installation of unknown file to bin/libexec *)
+                       | `Cygwin           (* Installation of a Cygwin-linked executable *)
+                       | `Cygwin_libraries (* Installation of a binary linked to a Cygwin library *)
+                       ]
+(** Warnings which come from {!install} *)
+
+type install_warning_fn = string -> install_warning -> unit
+
+val default_install_warning : install_warning_fn
+(** The default warning function - displays a message on OpamConsole *)
+
 (** [install ?exec src dst] copies file [src] as file [dst] using [install].
     If [exec], make the resulting file executable (otherwise, look at the
     permissions of the original file to decide). *)
-val install: ?exec:bool -> string -> string -> unit
+val install: ?warning:install_warning_fn -> ?exec:bool -> string -> string -> unit
 
 (** Checks if a file is an executable (regular file with execution
     permission) *)
@@ -122,6 +144,10 @@ val rec_files: string -> string list
 (** Return the list of files in the current directory. *)
 val files: string -> string list
 
+(** Return the list of files in the current directory, inclduing any
+    dangling symlinks. *)
+val files_all_not_dir: string -> string list
+
 (** [rec_dirs dir] return the list list of all directories recursively
     (going through symbolink links). *)
 val rec_dirs: string -> string list
@@ -156,6 +182,11 @@ type command = string list
 (** Test whether a command exists in the environment, and returns it (resolved
     if found in PATH) *)
 val resolve_command: ?env:string array -> ?dir:string -> string -> string option
+
+(** Returns a function which should be applied to arguments for a given command
+    by determining if the command is the Cygwin variant of the command. Returns
+    the identity function otherwise. *)
+val get_cygpath_function: command:string -> (string -> string) lazy_t
 
 (** [command cmd] executes the command [cmd] in the correct OPAM
     environment. *)
@@ -196,6 +227,8 @@ val extract_in: dir:string -> string -> unit
 
 (** [extract_in_job] is similar to [extract_in], but as a job *)
 val extract_in_job: dir:string -> string -> exn option OpamProcess.job
+
+val make_tar_gz_job: dir:string -> string -> exn option OpamProcess.job
 
 (** Create a directory. Do not fail if the directory already
     exist. *)
@@ -257,6 +290,21 @@ val get_lock_fd: lock -> Unix.file_descr
     apply. *)
 val patch: ?preprocess:bool -> dir:string -> string -> exn option OpamProcess.job
 
+(** Returns the end-of-line encoding style for the given file. [None] means that
+    either the encoding of line endings is mixed, or the file contains no line
+    endings at all (an empty file, or a file with one line and no EOL at EOF).
+    Otherwise it returns [Some true] if all endings are encoded CRLF. *)
+val get_eol_encoding : string -> bool option
+
+(** [translate_patch ~dir input_patch output_patch] writes a copy of
+    [input_patch] to [output_patch] as though [input_patch] had been applied in
+    [dir]. The patch is rewritten such that if text files have different line
+    endings then the patch is transformed to patch using the encoding on disk.
+    In particular, this means that patches generated against Unix checkouts of
+    Git sources will correctly apply to Windows checkouts of the same sources.
+*)
+val translate_patch: dir:string -> string -> string -> unit
+
 (** Create a temporary file in {i ~/.opam/logs/<name>XXX}, if [dir] is not set.
     ?auto_clean controls whether the file is automatically deleted when opam
     terminates (default: [true]). *)
@@ -279,3 +327,12 @@ val forward_to_back : string -> string
 
 (** On Unix, a no-op. On Windows, convert \ to / *)
 val back_to_forward : string -> string
+
+(** Identifies kinds of executable files. At present, only useful on Windows.
+    Executable or DLLs are recognised based on their content, not on their
+    filename. Any file beginning "#!" is assumed to be a shell script and all
+    files are classified [`Unknown]. *)
+val classify_executable : string -> [ `Exe of [ `i386 | `x86 | `x86_64 ]
+                                    | `Dll of [ `x86 | `x86_64 ]
+                                    | `Script
+                                    | `Unknown ]

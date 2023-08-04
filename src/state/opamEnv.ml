@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -9,6 +9,7 @@
 (*                                                                        *)
 (**************************************************************************)
 
+open OpamParserTypes
 open OpamTypes
 open OpamStateTypes
 open OpamTypesBase
@@ -28,14 +29,30 @@ let join_var l =
 (* To allow in-place updates, we store intermediate values of path-like as a
    pair of list [(rl1, l2)] such that the value is [List.rev_append rl1 l2] and
    the place where the new value should be inserted is in front of [l2] *)
-let unzip_to elt =
-  let rec aux acc = function
-    | [] -> None
-    | x::r ->
-      if x = elt then Some (acc, r)
-      else aux (x::acc) r
+
+
+let unzip_to elt current =
+  (* If [r = l @ rs] then [remove_prefix l r] is [Some rs], otherwise [None] *)
+  let rec remove_prefix l r =
+    match l, r with
+    | (l::ls, r::rs) when l = r ->
+      remove_prefix ls rs
+    | ([], rs) -> Some rs
+    | _ -> None
   in
-  aux []
+    match split_var elt with
+    | [] -> invalid_arg "OpamEnv.unzip_to"
+    | hd::tl ->
+      let rec aux acc = function
+      | [] -> None
+      | x::r ->
+        if x = hd then
+          match remove_prefix tl r with
+          | Some r -> Some (acc, r)
+          | None -> aux (x::acc) r
+        else aux (x::acc) r
+      in
+        aux [] current
 
 let rezip ?insert (l1, l2) =
   List.rev_append l1 (match insert with None -> l2 | Some i -> i::l2)
@@ -234,7 +251,7 @@ let updates_common ~set_opamroot ~set_opamswitch root switch =
     else [] in
   root @ switch
 
-let updates ?(set_opamroot=false) ?(set_opamswitch=false) ?force_path st =
+let updates ~set_opamroot ~set_opamswitch ?force_path st =
   updates_common ~set_opamroot ~set_opamswitch st.switch_global.root st.switch @
   compute_updates ?force_path st
 
@@ -242,10 +259,11 @@ let get_pure ?(updates=[]) () =
   let env = List.map (fun (v,va) -> v,va,None) (OpamStd.Env.list ()) in
   add env updates
 
-let get_opam ?(set_opamroot=false) ?(set_opamswitch=false) ~force_path st =
+let get_opam ~set_opamroot ~set_opamswitch ~force_path st =
   add [] (updates ~set_opamroot ~set_opamswitch ~force_path st)
 
-let get_opam_raw ?(set_opamroot=false) ?(set_opamswitch=false) ~force_path
+let get_opam_raw ~set_opamroot ~set_opamswitch ?(base=[])
+    ~force_path
     root switch =
   let env_file = OpamPath.Switch.environment root switch in
   let upd = OpamFile.Environment.safe_read env_file in
@@ -269,19 +287,30 @@ let get_opam_raw ?(set_opamroot=false) ?(set_opamswitch=false) ~force_path
         upd
 
   in
-  add []
+  add base
     (updates_common ~set_opamroot ~set_opamswitch root switch @
      upd)
 
 let get_full
-    ?(set_opamroot=false) ?(set_opamswitch=false) ~force_path ?updates:(u=[])
+    ~set_opamroot ~set_opamswitch ~force_path ?updates:(u=[]) ?(scrub=[])
     st =
-  let env0 = List.map (fun (v,va) -> v,va,None) (OpamStd.Env.list ()) in
+  let env =
+    let env = OpamStd.Env.list () in
+    let map =
+      if Sys.win32 then
+        String.uppercase_ascii
+      else
+        (fun x -> x)
+    in
+    let scrub = List.rev_map map scrub |> OpamStd.String.Set.of_list in
+    List.filter (fun (name, _) -> not (OpamStd.String.Set.mem (map name) scrub)) env
+  in
+  let env0 = List.map (fun (v,va) -> v,va,None) env in
   let updates = u @ updates ~set_opamroot ~set_opamswitch ~force_path st in
   add env0 updates
 
-let is_up_to_date_raw updates =
-  OpamStateConfig.(!r.no_env_notice) ||
+let is_up_to_date_raw ?(skip=OpamStateConfig.(!r.no_env_notice)) updates =
+  skip ||
   let not_utd =
     List.fold_left (fun notutd (var, op, arg, _doc as upd) ->
         match OpamStd.Env.getopt var with
@@ -310,8 +339,8 @@ let is_up_to_date_switch root switch =
 let switch_path_update ~force_path root switch =
   let bindir =
     OpamPath.Switch.bin root switch
-      (OpamFile.Switch_config.safe_read
-         (OpamPath.Switch.switch_config root switch))
+      (OpamStateConfig.Switch.safe_load_t
+         ~lock_kind:`Lock_read root switch)
   in
   [
     "PATH",
@@ -329,47 +358,60 @@ let full_with_path ~force_path ?(updates=[]) root switch =
   let env0 = List.map (fun (v,va) -> v,va,None) (OpamStd.Env.list ()) in
   add env0 (switch_path_update ~force_path root switch @ updates)
 
-let is_up_to_date st =
-  is_up_to_date_raw
+let is_up_to_date ?skip st =
+  is_up_to_date_raw ?skip
     (updates ~set_opamroot:false ~set_opamswitch:false ~force_path:false st)
+
+(** Returns shell-appropriate statement to evaluate [cmd]. *)
+let shell_eval_invocation shell cmd =
+  match shell with
+  | SH_fish ->
+    Printf.sprintf "eval (%s)" cmd
+  | SH_csh ->
+    Printf.sprintf "eval `%s`" cmd
+  | _ ->
+    Printf.sprintf "eval $(%s)" cmd
+
+(** Returns "opam env" invocation string together with optional root and switch
+    overrides *)
+let opam_env_invocation ?root ?switch ?(set_opamswitch=false) () =
+  let root = OpamStd.Option.map_default (Printf.sprintf " --root=%s") "" root in
+  let switch = OpamStd.Option.map_default (Printf.sprintf " --switch=%s") "" switch in
+  let setswitch = if set_opamswitch then " --set-switch" else "" in
+  Printf.sprintf "opam env%s%s%s" root switch setswitch
 
 let eval_string gt ?(set_opamswitch=false) switch =
   let root =
     let opamroot_cur = OpamFilename.Dir.to_string gt.root in
     let opamroot_env =
       OpamStd.Option.Op.(
-        OpamStd.Env.getopt "OPAMROOT" +!
+        OpamStateConfig.E.root () +!
         OpamFilename.Dir.to_string OpamStateConfig.(default.root_dir)
       ) in
     if opamroot_cur <> opamroot_env then
-      Printf.sprintf " --root=%s" opamroot_cur
+      Some opamroot_cur
     else
-      "" in
+      None
+  in
   let switch =
-    match switch with
-    | None -> ""
-    | Some sw ->
+    (* Returns the switch only if it is different from the one determined by the
+      environment *)
+    let f sw =
       let sw_cur = OpamSwitch.to_string sw in
       let sw_env =
         OpamStd.Option.Op.(
-          OpamStd.Env.getopt "OPAMSWITCH" ++
+          OpamStateConfig.E.switch () ++
           (OpamStateConfig.get_current_switch_from_cwd gt.root >>|
-           OpamSwitch.to_string) ++
+            OpamSwitch.to_string) ++
           (OpamFile.Config.switch gt.config >>| OpamSwitch.to_string)
         )
       in
-      if Some sw_cur <> sw_env then Printf.sprintf " --switch=%s" sw_cur
-      else ""
+      if Some sw_cur <> sw_env then Some sw_cur else None
+    in
+    OpamStd.Option.replace f switch
   in
-  let setswitch = if set_opamswitch then " --set-switch" else "" in
-  match OpamStd.Sys.guess_shell_compat () with
-  | SH_fish ->
-    Printf.sprintf "eval (opam env%s%s%s)" root switch setswitch
-  | SH_csh ->
-    Printf.sprintf "eval `opam env%s%s%s`" root switch setswitch
-  | _ ->
-    Printf.sprintf "eval $(opam env%s%s%s)" root switch setswitch
-
+  let shell = OpamStd.Sys.guess_shell_compat () in
+  shell_eval_invocation shell (opam_env_invocation ?root ?switch ~set_opamswitch ())
 
 
 (* -- Shell and init scripts handling -- *)
@@ -457,15 +499,18 @@ let env_hook_script shell =
     (env_hook_script_base shell)
 
 let source root shell f =
-  let file f = OpamFilename.to_string (OpamPath.init root // f) in
+  let fname = OpamFilename.to_string (OpamPath.init root // f) in
   match shell with
   | SH_csh ->
-    Printf.sprintf "source %s >& /dev/null || true\n" (file f)
+    Printf.sprintf "if ( -f %s ) source %s >& /dev/null\n" fname fname
   | SH_fish ->
-    Printf.sprintf "source %s > /dev/null 2> /dev/null; or true\n" (file f)
-  | SH_sh | SH_bash | SH_zsh ->
+    Printf.sprintf "source %s > /dev/null 2> /dev/null; or true\n" fname
+  | SH_sh | SH_bash ->
     Printf.sprintf "test -r %s && . %s > /dev/null 2> /dev/null || true\n"
-      (file f) (file f)
+      fname fname
+  | SH_zsh ->
+    Printf.sprintf "[[ ! -r %s ]] || source %s  > /dev/null 2> /dev/null\n"
+      fname fname
 
 let if_interactive_script shell t e =
   let ielse else_opt = match else_opt with
@@ -473,8 +518,10 @@ let if_interactive_script shell t e =
     | Some e -> Printf.sprintf "else\n  %s" e
   in
   match shell with
-  | SH_sh | SH_zsh | SH_bash ->
+  | SH_sh| SH_bash ->
     Printf.sprintf "if [ -t 0 ]; then\n  %s%sfi\n" t @@ ielse e
+  | SH_zsh ->
+    Printf.sprintf "if [[ -o interactive ]]; then\n  %s%sfi\n" t @@ ielse e
   | SH_csh ->
     Printf.sprintf "if ( $?prompt ) then\n  %s%sendif\n" t @@ ielse e
   | SH_fish ->
@@ -522,7 +569,7 @@ let write_init_shell_scripts root =
   in
   List.iter (write_script (OpamPath.init root)) scripts
 
-let write_static_init_scripts root ?completion ?env_hook () =
+let write_static_init_scripts root ?completion ?env_hook ?(inplace=false) () =
   write_init_shell_scripts root;
   let update_scripts filef scriptf enable =
     let scripts =
@@ -532,13 +579,18 @@ let write_static_init_scripts root ?completion ?env_hook () =
           | _ -> None)
         shells_list
     in
-    match enable with
-    | Some true ->
+    match enable, inplace with
+    | Some true, _ ->
       List.iter (write_script (OpamPath.init root)) scripts
-    | Some false ->
-      List.iter (fun (f,_) -> OpamFilename.remove (OpamPath.init root // f))
+    | _, true ->
+      List.iter (fun ((f,_) as fs) ->
+          if OpamFilename.exists (OpamPath.init root // f) then
+            write_script (OpamPath.init root) fs)
         scripts
-    | None -> ()
+    | Some false, _ ->
+      List.iter (fun (f,_) ->
+          OpamFilename.remove (OpamPath.init root // f)) scripts
+    | None, _ -> ()
   in
   update_scripts complete_file complete_script completion;
   update_scripts env_hook_file env_hook_script env_hook
@@ -569,6 +621,9 @@ let write_custom_init_scripts root custom =
 let write_dynamic_init_scripts st =
   let updates = updates ~set_opamroot:false ~set_opamswitch:false st in
   try
+    if OpamStateConfig.is_newer_than_self
+        ~lock_kind:`Lock_write st.switch_global then
+      raise OpamSystem.Locked;
     OpamFilename.with_flock_upgrade `Lock_write ~dontblock:true
       st.switch_global.global_lock
     @@ fun _ ->
@@ -607,7 +662,8 @@ let dot_profile_needs_update root dot_profile =
 let update_dot_profile root dot_profile shell =
   let pretty_dot_profile = OpamFilename.prettify dot_profile in
   let bash_src () =
-    if shell = SH_bash || shell = SH_sh then
+    if (shell = SH_bash || shell = SH_sh)
+    && OpamFilename.(Base.to_string (basename dot_profile)) <> ".bashrc" then
       OpamConsole.note "Make sure that %s is well %s in your ~/.bashrc.\n"
         pretty_dot_profile
         (OpamConsole.colorise `underline "sourced")
@@ -643,6 +699,9 @@ let update_user_setup root ?dot_profile shell =
   )
 
 let check_and_print_env_warning st =
+  (* if you are trying to silence this warning,
+     set the ~no_env_notice:true flag from OpamStateConfig,
+     which is checked by (is_up_to_date st). *)
   if not (is_up_to_date st) &&
      (OpamFile.Config.switch st.switch_global.config = Some st.switch ||
       OpamStateConfig.(!r.switch_from <> `Command_line))
@@ -654,7 +713,7 @@ let check_and_print_env_warning st =
 
 let setup
     root ~interactive ?dot_profile ?update_config ?env_hook ?completion
-    shell =
+    ?inplace shell =
   let update_dot_profile =
     match update_config, dot_profile, interactive with
     | Some false, _, _ -> None
@@ -666,7 +725,7 @@ let setup
 
       OpamConsole.msg
         "\n\
-        \  In normal operation, opam only alters files within ~/.opam.\n\
+        \  In normal operation, opam only alters files within ~%s.opam.\n\
          \n\
         \  However, to best integrate with your system, some environment variables\n\
         \  should be set. If you allow it to, this initialisation step will update\n\
@@ -680,38 +739,50 @@ let setup
         \    %s\n\
          \n\
         \  You can always re-run this setup with 'opam init' later.\n\n"
+        Filename.dir_sep
         (OpamConsole.colorise `bold @@ string_of_shell shell)
         (OpamConsole.colorise `cyan @@ OpamFilename.prettify dot_profile)
         (OpamConsole.colorise `bold @@ source root shell (init_file shell))
-        (OpamConsole.colorise `bold @@ "eval $(opam env)");
-      match
-        OpamConsole.read
-          "Do you want opam to modify %s? [N/y/f]\n\
-           (default is 'no', use 'f' to choose a different file)"
-          (OpamFilename.prettify dot_profile)
-      with
-      | Some ("y" | "Y" | "yes"  | "YES" ) -> Some dot_profile
-      | Some ("f" | "F" | "file" | "FILE") ->
-        begin
-          match OpamConsole.read "  Enter the name of the file to update:"
-          with
-          | None   ->
-            OpamConsole.msg "Alright, assuming you changed your mind, not \
-                             performing any changes.\n";
-            None
-          | Some f -> Some (OpamFilename.of_string f)
-        end
-      | _ -> None
+        (OpamConsole.colorise `bold @@ shell_eval_invocation shell (opam_env_invocation ()));
+      if OpamCoreConfig.answer_is_yes () then begin
+        OpamConsole.warning "Shell not updated in non-interactive mode: use --shell-setup";
+        None
+      end else
+        match
+          OpamConsole.read
+            "Do you want opam to modify %s? [N/y/f]\n\
+             (default is 'no', use 'f' to choose a different file)"
+            (OpamFilename.prettify dot_profile)
+        with
+        | Some ("y" | "Y" | "yes"  | "YES" ) -> Some dot_profile
+        | Some ("f" | "F" | "file" | "FILE") ->
+          begin
+            match OpamConsole.read "  Enter the name of the file to update:"
+            with
+            | None   ->
+              OpamConsole.msg "Alright, assuming you changed your mind, not \
+                               performing any changes.\n";
+              None
+            | Some f -> Some (OpamFilename.of_string f)
+          end
+        | _ -> None
   in
   let env_hook = match env_hook, interactive with
     | Some b, _ -> Some b
     | None, false -> None
     | None, true ->
-      Some
-        (OpamConsole.confirm ~default:false
-           "A hook can be added to opam's init scripts to ensure that the \
-            shell remains in sync with the opam environment when they are \
-            loaded. Set that up?")
+      (* not just interactive mode *)
+      if update_config <> None || completion <> None then None else
+          Some
+          (OpamConsole.confirm ~default:false
+             "A hook can be added to opam's init scripts to ensure that the \
+              shell remains in sync with the opam environment when they are \
+              loaded. Set that up?")
   in
   update_user_setup root ?dot_profile:update_dot_profile shell;
-  write_static_init_scripts root ?completion ?env_hook ()
+  write_static_init_scripts root ?completion ?env_hook ?inplace ()
+
+let hook_env root =
+  let hook_vnam = OpamVariable.of_string "hooks" in
+  let hook_vval = Some (OpamVariable.dirname (OpamPath.hooks_dir root)) in
+  OpamVariable.Map.singleton hook_vnam hook_vval
