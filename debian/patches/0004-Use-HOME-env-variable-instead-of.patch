@@ -8,21 +8,21 @@ Subject: Use HOME env variable instead of ~
  2 files changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/src/client/opamAdminCommand.ml b/src/client/opamAdminCommand.ml
-index dca5490..49642cb 100644
+index 65a1afb..db797f9 100644
 --- a/src/client/opamAdminCommand.ml
 +++ b/src/client/opamAdminCommand.ml
-@@ -261,7 +261,8 @@ let add_hashes_command_doc =
- let add_hashes_command =
+@@ -281,7 +281,8 @@ let add_hashes_command_doc =
+ let add_hashes_command cli =
    let command = "add-hashes" in
    let doc = add_hashes_command_doc in
 -  let cache_dir = OpamFilename.Dir.of_string "~/.cache/opam-hash-cache" in
 +  let home = try Sys.getenv "HOME" with Not_found -> Sys.getcwd () in
 +  let cache_dir = OpamFilename.Dir.of_string (Filename.concat home "/.cache/opam-hash-cache") in
    let man = [
-     `S "DESCRIPTION";
+     `S Manpage.s_description;
      `P (Printf.sprintf
 diff --git a/src/client/opamAdminRepoUpgrade.ml b/src/client/opamAdminRepoUpgrade.ml
-index 704a009..0be53b2 100644
+index b3af2e5..93c0ce6 100644
 --- a/src/client/opamAdminRepoUpgrade.ml
 +++ b/src/client/opamAdminRepoUpgrade.ml
 @@ -145,8 +145,9 @@ let all_base_packages =
@@ -35,4 +35,4 @@ index 704a009..0be53b2 100644
 +  OpamFilename.of_string (Filename.concat home "/.cache/opam-compilers-to-packages/url-hashes")
  
  let do_upgrade repo_root =
-   let repo = OpamRepositoryBackend.local repo_root in
+   let write_opam ?(add_files=[]) opam =

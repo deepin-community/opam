@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2014 OCamlPro                                             *)
+(*    Copyright 2014-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -29,6 +29,7 @@ let name_of_action = function
   | `Change (`Down,_,_) -> "downgrade"
   | `Reinstall _ -> "recompile"
   | `Build _ -> "build"
+  | `Fetch _ -> "fetch"
 
 let symbol_of_action =
   let open OpamConsole in
@@ -51,6 +52,10 @@ let symbol_of_action =
   | `Build _ ->
       utf8_symbol Symbols.greek_small_letter_lambda
                   ~alternates:[Symbols.six_pointed_black_star] "B"
+  | `Fetch _ ->
+    utf8_symbol Symbols.downwards_black_arrow
+      ~alternates:[Symbols.downwards_double_arrow;
+                   Symbols.black_down_pointing_triangle] "F"
 
 let action_strings ?utf8 a =
   if utf8 = None && (OpamConsole.utf8 ()) || utf8 = Some true
@@ -62,7 +67,7 @@ let action_color c =
       | `Install _ | `Change (`Up,_,_) -> `green
       | `Remove _ | `Change (`Down,_,_) -> `red
       | `Reinstall _ -> `yellow
-      | `Build _ -> `cyan)
+      | `Build _ | `Fetch _ -> `cyan)
 
 module MakeAction (P: GenericPackage) : ACTION with type package = P.t
 = struct
@@ -71,12 +76,13 @@ module MakeAction (P: GenericPackage) : ACTION with type package = P.t
   type t = package action
 
   let compare t1 t2 =
-    (* `Install > `Build > `Upgrade > `Reinstall > `Downgrade > `Remove *)
+    (* `Install > `Build > `Fetch > `Upgrade > `Reinstall > `Downgrade > `Remove *)
     match t1,t2 with
     | `Remove p, `Remove q
     | `Install p, `Install q
     | `Reinstall p, `Reinstall q
     | `Build p, `Build q
+    | `Fetch p, `Fetch q
       -> P.compare p q
     | `Change (`Up,p0,p), `Change (`Up,q0,q)
     | `Change (`Down,p0,p), `Change (`Down,q0,q)
@@ -86,16 +92,16 @@ module MakeAction (P: GenericPackage) : ACTION with type package = P.t
     | `Install _, _ | _, `Remove _ -> 1
     | _, `Install _ | `Remove _, _ -> -1
     | `Build _, _ | _, `Change (`Down,_,_) -> 1
-    | `Change (`Down,_,_), _ | _, `Build _ -> -1
-    | `Change (`Up,_,_), `Reinstall _ -> 1
-    | `Reinstall _, `Change(`Up,_,_) -> -1
+    | _, `Build _ | `Change (`Down,_,_), _ -> -1
+    | `Fetch _, _ | _, `Reinstall _ -> 1
+    | _, `Fetch _ | `Reinstall _, _ -> -1
 
   let hash a = Hashtbl.hash (OpamTypesBase.map_action P.hash a)
 
   let equal t1 t2 = compare t1 t2 = 0
 
   let to_string a = match a with
-    | `Remove p | `Install p | `Reinstall p | `Build p ->
+    | `Remove p | `Install p | `Reinstall p | `Build p | `Fetch p ->
       Printf.sprintf "%s %s" (action_strings a) (P.to_string p)
     | `Change (_,p0,p) ->
       Printf.sprintf "%s.%s %s %s"
@@ -114,7 +120,7 @@ module MakeAction (P: GenericPackage) : ACTION with type package = P.t
         :: OpamConsole.colorise `bold
           (P.name_to_string (OpamTypesBase.action_contents a))
         :: match a with
-        | `Remove p | `Install p | `Reinstall p | `Build p ->
+        | `Remove p | `Install p | `Reinstall p | `Build p | `Fetch p ->
           (P.version_to_string p ^ append p) :: []
         | `Change (_,p0,p) ->
           Printf.sprintf "%s to %s"
@@ -126,16 +132,40 @@ module MakeAction (P: GenericPackage) : ACTION with type package = P.t
   let to_json = function
     | `Remove p -> `O ["remove", P.to_json p]
     | `Install p -> `O ["install", P.to_json p]
-    | `Change (_, o, p) ->
-      `O ["change", `A [P.to_json o;P.to_json p]]
+    | `Change (d, o, p) ->
+      let dir_to_json = function
+          | `Up -> `String "up"
+          | `Down -> `String "down" in
+      `O ["change", `A [dir_to_json d; P.to_json o;P.to_json p]]
     | `Reinstall p -> `O ["recompile", P.to_json p]
     | `Build p -> `O ["build", P.to_json p]
+    | `Fetch p -> `O ["fetch", P.to_json p]
+
+  let of_json =
+    let open OpamStd.Option.Op in
+    function
+    | `O ["remove", p] -> P.of_json p >>= (fun p -> Some (`Remove p))
+    | `O ["install", p] -> P.of_json p >>= (fun p -> Some (`Install p))
+    | `O ["change", `A [dj; oj; pj]] ->
+      let json_of_dir = function
+        | `String "up" -> Some `Up
+        | `String "down" -> Some `Down
+        | _ -> None in
+      json_of_dir dj >>= fun d ->
+      P.of_json oj >>= fun o ->
+      P.of_json pj >>= fun p ->
+      Some (`Change(d, o, p))
+    | `O ["recompile", p] -> P.of_json p >>= (fun p -> Some (`Reinstall p))
+    | `O ["build", p] -> P.of_json p >>= (fun p -> Some (`Build p))
+    | `O ["fetch", p] -> P.of_json p >>= (fun p -> Some (`Fetch p))
+    | _ -> None
 
   module O = struct
       type t = package action
       let compare = compare
       let to_string = to_string
       let to_json = to_json
+      let of_json = of_json
     end
 
   module Set = OpamStd.Set.Make(O)
@@ -147,7 +177,8 @@ module type SIG = sig
   type package
   include OpamParallel.GRAPH with type V.t = package OpamTypes.action
   val reduce: t -> t
-  val explicit: ?noop_remove:(package -> bool) -> t -> t
+  val explicit:
+    ?noop_remove:(package -> bool) -> sources_needed:(package -> bool) -> t -> t
   val fold_descendants: (V.t -> 'a -> 'a) -> 'a -> t -> V.t -> 'a
 end
 
@@ -208,6 +239,8 @@ module Make (A: ACTION) : SIG with type package = A.package = struct
       ) !reduced;
     g
 
+  let same_name p1 p2 = A.Pkg.(name_to_string p1 = name_to_string p2)
+
   let compute_closed_predecessors noop_remove g =
     let closed_g = copy g in
     transitive_closure closed_g;
@@ -234,7 +267,12 @@ module Make (A: ACTION) : SIG with type package = A.package = struct
             let preds =
               List.filter
                 (function
-                  | `Build p -> Set.mem p closed_packages
+                  | `Build q as b ->
+                    Set.mem q closed_packages &&
+                    not (List.exists (function
+                        | `Remove r -> same_name p r
+                        | _ -> false)
+                        (pred closed_g b))
                   | _ -> false)
                 (pred closed_g a) in
             OpamStd.String.Map.add (A.Pkg.name_to_string p) preds acc
@@ -248,9 +286,8 @@ module Make (A: ACTION) : SIG with type package = A.package = struct
     | None -> []
     | Some pred -> pred
 
-  let explicit ?(noop_remove = (fun _ -> false)) g0 =
+  let explicit ?(noop_remove = (fun _ -> false)) ~sources_needed g0 =
     let g = copy g0 in
-    let same_name p1 p2 = A.Pkg.(name_to_string p1 = name_to_string p2) in
     (* We insert a "build" action before any "install" action.
        Except, between the removal and installation of the same package
        (the removal might be postponed after a succesfull build. *)
@@ -264,7 +301,7 @@ module Make (A: ACTION) : SIG with type package = A.package = struct
             g0 a;
           add_edge g b a
         | `Remove _ -> ()
-        | `Build _ -> assert false)
+        | `Build _ | `Fetch _ -> assert false)
       g0;
     (* For delaying removal a little bit, for each action "remove A" we add
        a constraint "build B -> remove A" for transitive predecessors
@@ -278,8 +315,26 @@ module Make (A: ACTION) : SIG with type package = A.package = struct
           List.iter
             (fun b -> add_edge g b a)
             (closed_predecessors p)
-        | `Install _ | `Reinstall _ | `Change _ | `Build _ -> ())
+        | `Install _ | `Reinstall _ | `Change _ | `Build _ | `Fetch _ -> ())
       g;
+    (* Add a "fetch" action as a dependency for all "build" and "remove" actions
+       that require it (via [sources_needed]). *)
+    let acc_add_action (acc: vertex list Map.t)
+        (p: A.package) (a: vertex) : vertex list Map.t =
+      let acts = try Map.find p acc with Not_found -> [] in
+      Map.add p (a :: acts) acc
+    in
+    let m = fold_vertex (fun a acc ->
+        match a with
+        | `Build p | `Remove p ->
+          if sources_needed p then acc_add_action acc p a else acc
+        | `Install _ | `Reinstall _ | `Change _ -> acc
+        | `Fetch _ -> assert false
+      ) g Map.empty in
+    Map.iter (fun p acts ->
+        let f = `Fetch p in
+        List.iter (fun a -> add_edge g f a) acts
+      ) m;
     g
 
   let fold_descendants f acc t v =

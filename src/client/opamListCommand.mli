@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -11,6 +11,7 @@
 
 (** Functions handling the "opam list" subcommand *)
 
+open OpamParserTypes.FullPos
 open OpamTypes
 open OpamStateTypes
 
@@ -69,10 +70,10 @@ val filter:
 val pattern_selector: string list -> selector OpamFormula.formula
 
 (** Get the aggregated active external dependencies of the given packages *)
-val get_depexts: 'a switch_state -> package_set -> OpamStd.String.Set.t
+val get_depexts: 'a switch_state -> package_set -> OpamSysPkg.Set.t
 
 (** Lists the given aggregated active external dependencies of the given packages *)
-val print_depexts: OpamStd.String.Set.t -> unit
+val print_depexts: OpamSysPkg.Set.t -> unit
 
 (** Element of package information to be printed. Fixme: should be part of the
     run-time man! *)
@@ -84,6 +85,7 @@ type output_format =
   | Synopsis_or_target (** Pinning target if pinned, synopsis otherwise *)
   | Description        (** The package description, excluding synopsis *)
   | Field of string    (** The value of the given opam-file field *)
+  | Raw_field of string   (** The raw value of the given opam-file field *)
   | Installed_version  (** Installed version or "--" if none *)
   | Pinning_target     (** Empty string if not pinned *)
   | Source_hash        (** The VC-reported ident of current version, for dev
@@ -108,14 +110,19 @@ val default_list_format: output_format list
 
 (** Gets either the current switch state, if a switch is selected, or a virtual
     state corresponding to the configured repos *)
-val get_switch_state: 'a global_state -> unlocked switch_state
+val get_switch_state: 'a global_state -> 'a repos_state -> unlocked switch_state
 
-(** For documentation, includes a dummy '<field>:' for the [Field] format *)
+(** For documentation, includes a dummy '<field>:' for the [Field] format.
+    Used for the --columns argument. *)
+val raw_field_names: (output_format * string) list
+
+(** For documentation, includes a dummy '<field>:' and '<field>' for the
+    [Field] format. Used for the --field argument. *)
 val field_names: (output_format * string) list
 
-val string_of_field: output_format -> string
+val string_of_field: ?raw:bool -> output_format -> string
 
-val field_of_string: string -> output_format
+val field_of_string: raw:bool -> string -> output_format
 
 type package_listing_format = {
   short: bool;
@@ -139,8 +146,8 @@ val display: 'a switch_state -> package_listing_format -> package_set -> unit
 (** Display a general summary of a collection of packages. *)
 val info:
   'a switch_state ->
-  fields:string list -> raw_opam:bool -> where:bool ->
-  ?normalise:bool -> ?show_empty:bool ->
+  fields:string list -> raw:bool -> where:bool ->
+  ?normalise:bool -> ?show_empty:bool -> ?all_versions:bool -> ?sort:bool ->
   atom list -> unit
 
 (** Prints the value of an opam field in a shortened way (with [prettify] -- the

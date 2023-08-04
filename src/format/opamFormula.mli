@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -13,7 +13,7 @@
     functions *)
 
 (** binary operations (compatible with the Dose type for Cudf operators!) *)
-type relop = OpamParserTypes.relop (* = [ `Eq | `Neq | `Geq | `Gt | `Leq | `Lt ] *)
+type relop = OpamParserTypes.FullPos.relop_kind (* = [ `Eq | `Neq | `Geq | `Gt | `Leq | `Lt ] *)
 
 (** Version constraints for OPAM *)
 type version_constraint = relop * OpamPackage.Version.t
@@ -24,9 +24,13 @@ type atom = OpamPackage.Name.t * version_constraint option
 (** Pretty-printing of atoms *)
 val string_of_atom: atom -> string
 
-(** The compact atom format used in requests, "pkgOPvers", with '.' allowed instead
-    of '=' *)
+(** The compact atom format used in requests, "pkgOPvers", with '.' allowed
+    instead of '=' *)
 val short_string_of_atom: atom -> string
+
+(** Parses a package or atom, in a format similar to [short_string_of_atom].
+    @raise [Failure] if the format is incorrect *)
+val atom_of_string: string -> atom
 
 (** Prints atoms as a conjunction ("&") using the short format *)
 val string_of_atoms: atom list -> string
@@ -36,8 +40,11 @@ val check: atom -> OpamPackage.t -> bool
 
 (** Return all packages satisfying the given atoms from a set (i.e. name
     matching at least one of the atoms, version matching all atoms with the
-    appropriate name) *)
-val packages_of_atoms: OpamPackage.Set.t -> atom list -> OpamPackage.Set.t
+    appropriate name). If [disj] is true, returns packages that satisfy at
+    least one of the constraint of a given name, otherwise that satisfy all
+    constraints. *)
+val packages_of_atoms:
+  ?disj:bool -> OpamPackage.Set.t -> atom list -> OpamPackage.Set.t
 
 (** AND formulas *)
 type 'a conjunction = 'a list
@@ -70,6 +77,8 @@ type 'a formula =
   | Block of 'a formula
   | And of 'a formula * 'a formula
   | Or of 'a formula * 'a formula
+
+val compare_formula: ('a -> 'a -> int) -> 'a formula -> 'a formula -> int
 
 (** Eval a formula *)
 val eval: ('a -> bool) -> 'a formula -> bool
@@ -126,6 +135,10 @@ val fold_left: ('a -> 'b -> 'a) -> 'a -> 'b formula -> 'a
 (** Fold function (bottom-up, right-to-left) *)
 val fold_right: ('a -> 'b -> 'a) -> 'a -> 'b formula -> 'a
 
+(** Sort formula, using [compare] function. `Block` around `Or` and `And` \
+    are removed. *)
+val sort: ('a -> 'a -> int) -> 'a formula -> 'a formula
+
 (** Expressions composed entirely of version constraints *)
 type version_formula = version_constraint formula
 
@@ -138,14 +151,24 @@ val check_version_formula: version_formula -> OpamPackage.Version.t -> bool
     - "foo" \{= "1" | > "4"\} | ("bar" "bouh") *)
 type t = (OpamPackage.Name.t * version_formula) formula
 
+val compare: t -> t -> int
+
 (** Returns [true] if [package] verifies [formula] (i.e. it is within at least
     one package set that is a solution of the formula, and is named in the
     formula) *)
 val verifies: t -> OpamPackage.t -> bool
 
+(** Checks if a given set of (installed) packages satisfies a formula *)
+val satisfies_depends: OpamPackage.Set.t -> t -> bool
+
 (** Returns the subset of packages possibly matching the formula (i.e. including
     all disjunction cases) *)
 val packages: OpamPackage.Set.t -> t -> OpamPackage.Set.t
+
+val compare_nc:
+  (OpamPackage.Name.t * version_formula) ->
+  (OpamPackage.Name.t * version_formula) ->
+  int
 
 (** Convert a formula to CNF *)
 val cnf_of_formula: 'a formula -> 'a formula

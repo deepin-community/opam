@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2017 OCamlPro                                             *)
+(*    Copyright 2017-2019 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -158,3 +158,14 @@ let variables =
       "os-version", os_version_lazy;
       "os-family", os_family_lazy;
     ]
+
+let cores_lazy = lazy (OpamSystem.cpu_count ())
+let cores () = Lazy.force cores_lazy
+
+let to_string () =
+  let open OpamStd.Option.Op in
+  Printf.sprintf "arch=%s os=%s os-distribution=%s os-version=%s"
+    (arch () +! "unknown")
+    (os () +! "unknown")
+    (os_distribution () +! "unknown")
+    (os_version () +! "unknown")

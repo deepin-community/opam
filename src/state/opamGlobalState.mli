@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -27,6 +27,9 @@ val all_installed: 'a global_state -> package_set
 
 val switches: 'a global_state -> switch list
 
+(** Fold over switches, using switch selections. Switch selection file
+   [switch-state] is loaded only read-only; no further checks are done on the opam root
+   version. *)
 val fold_switches:
   (switch -> switch_selections -> 'a -> 'a) -> 'b global_state -> 'a -> 'a
 
@@ -45,6 +48,15 @@ val repos_list: 'a global_state -> repository_name list
 
 (** Releases any locks on the given global_state *)
 val unlock: 'a global_state -> unlocked global_state
+
+(** Releases any locks on the given global state and then ignores it.
+
+    Using [drop gt] is equivalent to [ignore (unlock gt)],
+    and safer than other uses of [ignore]
+    where it is not enforced by the type-system
+    that the value is unlocked before it is lost.
+*)
+val drop: 'a global_state -> unit
 
 (** Calls the provided function, ensuring a temporary write lock on the given
     global state *)

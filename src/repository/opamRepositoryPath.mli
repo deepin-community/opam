@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -14,7 +14,9 @@
 open OpamTypes
 
 (** Repository local path: {i $opam/repo/<name>} *)
-val create: dirname -> repository_name -> dirname
+val root: dirname -> repository_name -> dirname
+
+val tar: dirname -> repository_name -> filename
 
 (** Prefix where to store the downloaded files cache: {i $opam/download-cache}.
     Warning, this is relative to the opam root, not a repository root. *)

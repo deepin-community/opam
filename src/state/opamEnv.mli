@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -19,22 +19,28 @@ open OpamStateTypes
 (** Get the current environment with OPAM specific additions. If [force_path],
     the PATH is modified to ensure opam dirs are leading. [set_opamroot] and
     [set_opamswitch] can be additionally used to set the [OPAMROOT] and
-    [OPAMSWITCH] variables. *)
+    [OPAMSWITCH] variables. [scrub] is a list of environment variables to
+    remove from the environment. *)
 val get_full:
-  ?set_opamroot:bool -> ?set_opamswitch:bool -> force_path:bool ->
-  ?updates:env_update list -> 'a switch_state -> env
+  set_opamroot:bool -> set_opamswitch:bool -> force_path:bool ->
+  ?updates:env_update list -> ?scrub:string list -> 'a switch_state -> env
 
 (** Get only environment modified by OPAM. If [force_path], the PATH is modified
     to ensure opam dirs are leading. [set_opamroot] and [set_opamswitch] can be
-    additionally used to set the [OPAMROOT] and [OPAMSWITCH] variables. *)
+    additionally used to set the [OPAMROOT] and [OPAMSWITCH] variables.
+
+    With [base], apply the modifications to the specified base environment *)
 val get_opam:
-  ?set_opamroot:bool -> ?set_opamswitch:bool -> force_path:bool ->
+  set_opamroot:bool -> set_opamswitch:bool -> force_path:bool ->
   'a switch_state -> env
 
 (** Like [get_opam], but reads the cache file from the given opam root and
-    switch instead of computing the environment from a switch state *)
+    switch instead of computing the environment from a switch state.
+
+    With [base], apply the modifications to the specified base environment *)
 val get_opam_raw:
-  ?set_opamroot:bool -> ?set_opamswitch:bool -> force_path:bool ->
+  set_opamroot:bool -> set_opamswitch:bool -> ?base:env ->
+  force_path:bool ->
   dirname -> switch -> env
 
 (** Returns the running environment, with any opam modifications cleaned out,
@@ -49,13 +55,12 @@ val add: env -> env_update list -> env
 (** Like [get_opam] computes environment modification by OPAM , but returns
     these [updates] instead of the new environment. *)
 val updates:
-  ?set_opamroot:bool -> ?set_opamswitch:bool -> ?force_path:bool ->
+  set_opamroot:bool -> set_opamswitch:bool -> ?force_path:bool ->
   'a switch_state -> env_update list
 
-(** Check if the shell environment is in sync with the current OPAM switch (or
-    if OPAMNOENVNOTICE has been set, in which case we just assume it's up to
-    date) *)
-val is_up_to_date: 'a switch_state -> bool
+(** Check if the shell environment is in sync with the current OPAM switch,
+    unless [skip] is true (it's default value is OPAMNOENVNOTICE *)
+val is_up_to_date: ?skip:bool -> 'a switch_state -> bool
 
 (** Check if the shell environment is in sync with the given opam root and
     switch (or if OPAMNOENVNOTICE has been set, in which case we just assume
@@ -65,6 +70,15 @@ val is_up_to_date_switch: dirname -> switch -> bool
 (** Returns the current environment updates to configure the current switch with
     its set of installed packages *)
 val compute_updates: ?force_path:bool -> 'a switch_state -> env_update list
+
+(** Returns shell-appropriate statement to evaluate [cmd]. *)
+val shell_eval_invocation:
+  OpamTypes.shell -> string -> string
+
+(** Returns "opam env" invocation string together with optional root and switch
+    overrides *)
+val opam_env_invocation:
+  ?root:string -> ?switch:string -> ?set_opamswitch:bool -> unit -> string
 
 (** The shell command to run by the user to set his OPAM environment, adapted to
     the current shell (as returned by [eval `opam config env`]) *)
@@ -86,7 +100,7 @@ val full_with_path:
     and asking the user if either [update_config] or [shell_hook] are unset *)
 val setup:
   dirname -> interactive:bool -> ?dot_profile:filename ->
-  ?update_config:bool -> ?env_hook:bool -> ?completion:bool ->
+  ?update_config:bool -> ?env_hook:bool -> ?completion:bool -> ?inplace:bool ->
   shell -> unit
 
 (* (\** Display the global and user configuration for OPAM. *\)
@@ -98,9 +112,10 @@ val update_user_setup:
 
 (** Write the generic scripts in ~/.opam/opam-init needed to import state for
     various shells. If specified, completion and env_hook files can also be
-    written or removed (the default is to keep them as they are) *)
+    written or removed (the default is to keep them as they are). If [inplace]
+    is true, they are updated if they exist. *)
 val write_static_init_scripts:
-  dirname -> ?completion:bool -> ?env_hook:bool -> unit -> unit
+  dirname -> ?completion:bool -> ?env_hook:bool -> ?inplace:bool -> unit -> unit
 
 (** Write into [OpamPath.hooks_dir] the given custom scripts (listed as
     (filename, content)), normally provided by opamrc ([OpamFile.InitConfig]) *)
@@ -121,3 +136,7 @@ val clear_dynamic_init_scripts: rw global_state -> unit
 (** Print a warning if the environment is not set-up properly.
     (General message) *)
 val check_and_print_env_warning: 'a switch_state -> unit
+
+(** Hook directory environment *)
+val hook_env:
+  OpamPath.t -> OpamVariable.variable_contents option OpamVariable.Map.t

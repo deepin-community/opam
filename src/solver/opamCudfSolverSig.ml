@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2017 OCamlPro                                             *)
+(*    Copyright 2017-2018 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -15,7 +15,8 @@ type criteria_def = {
   crit_best_effort_prefix: string option;
 }
 
-exception Timeout
+(** Timeout might still return a non-optimal solution *)
+exception Timeout of (Cudf.preamble option * Cudf.universe) option
 
 module type S = sig
 

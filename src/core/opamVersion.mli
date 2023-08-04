@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2016 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -30,6 +30,9 @@ val git: unit -> t option
 
 (** Side-effect to set the git version later in the build *)
 val set_git: string -> unit
+
+(** [true] if this is a development version of opam *)
+val is_dev_version : unit -> bool
 
 (** The full version (current + git) *)
 val full: unit -> t

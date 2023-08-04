@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -36,13 +36,16 @@ module Dir = struct
           (OpamStd.String.remove_prefix ~prefix:("~"^Filename.dir_sep) dirname)
       else dirname
     in
-    OpamSystem.real_path dirname
+    OpamSystem.real_path (OpamSystem.forward_to_back dirname)
 
   let to_string dirname = dirname
 
 end
 
 let raw_dir s = s
+
+let mk_tmp_dir () =
+  Dir.of_string @@ OpamSystem.mk_temp_dir ()
 
 let with_tmp_dir fn =
   OpamSystem.with_tmp_dir (fun dir -> fn (Dir.of_string dir))
@@ -139,8 +142,9 @@ type t = {
 }
 
 let create dirname basename =
-  let b1 = Filename.dirname (Base.to_string basename) in
+  let b1 = OpamSystem.forward_to_back (Filename.dirname (Base.to_string basename)) in
   let b2 = Base.of_string (Filename.basename (Base.to_string basename)) in
+  let dirname = OpamSystem.forward_to_back dirname in
   if basename = b2 then
     { dirname; basename }
   else
@@ -164,6 +168,12 @@ let touch t =
 let chmod t p =
   Unix.chmod (to_string t) p
 
+let written_since file =
+  let last_update =
+    (Unix.stat (to_string file)).Unix.st_mtime
+  in
+  (Unix.time () -. last_update)
+
 let of_string s =
   let dirname = Filename.dirname s in
   let basename = Filename.basename s in
@@ -183,8 +193,16 @@ let open_in filename =
   try open_in (to_string filename)
   with Sys_error _ -> raise (OpamSystem.File_not_found (to_string filename))
 
+let open_in_bin filename =
+  try open_in_bin (to_string filename)
+  with Sys_error _ -> raise (OpamSystem.File_not_found (to_string filename))
+
 let open_out filename =
   try open_out (to_string filename)
+  with Sys_error _ -> raise (OpamSystem.File_not_found (to_string filename))
+
+let open_out_bin filename =
+  try open_out_bin (to_string filename)
   with Sys_error _ -> raise (OpamSystem.File_not_found (to_string filename))
 
 let write filename raw =
@@ -220,14 +238,18 @@ let files d =
   let fs = OpamSystem.files (Dir.to_string d) in
   List.rev_map of_string fs
 
+let files_and_links d =
+  let fs = OpamSystem.files_all_not_dir (Dir.to_string d) in
+  List.rev_map of_string fs
+
 let copy ~src ~dst =
   if src <> dst then OpamSystem.copy_file (to_string src) (to_string dst)
 
 let copy_dir ~src ~dst =
   if src <> dst then OpamSystem.copy_dir (Dir.to_string src) (Dir.to_string dst)
 
-let install ?exec ~src ~dst () =
-  if src <> dst then OpamSystem.install ?exec (to_string src) (to_string dst)
+let install ?warning ?exec ~src ~dst () =
+  if src <> dst then OpamSystem.install ?warning ?exec (to_string src) (to_string dst)
 
 let move ~src ~dst =
   if src <> dst then
@@ -310,6 +332,9 @@ let extract_in filename dirname =
 let extract_in_job filename dirname =
   OpamSystem.extract_in_job (to_string filename) ~dir:(Dir.to_string dirname)
 
+let make_tar_gz_job filename dirname =
+  OpamSystem.make_tar_gz_job (to_string filename) ~dir:(Dir.to_string dirname)
+
 type generic_file =
   | D of Dir.t
   | F of t
@@ -365,6 +390,7 @@ let link ?(relative=false) ~target ~link =
       Filename.concat back forward
   in
   OpamSystem.link target (to_string link)
+[@@ocaml.warning "-16"]
 
 let patch ?preprocess filename dirname =
   OpamSystem.patch ?preprocess ~dir:(Dir.to_string dirname) (to_string filename)
@@ -444,6 +470,9 @@ let prettify s =
   prettify_path (to_string s)
 
 let to_json x = `String (to_string x)
+let of_json = function
+  | `String x -> (try Some (of_string x) with _ -> None)
+  | _ -> None
 
 module O = struct
   type tmp = t
@@ -451,6 +480,7 @@ module O = struct
   let compare = compare
   let to_string = to_string
   let to_json = to_json
+  let of_json = of_json
 end
 
 module Map = OpamStd.Map.Make(O)
@@ -514,12 +544,31 @@ module Attribute = struct
           | None   -> []
           | Some p -> ["perm", `String (string_of_int p)])
 
+  let of_json = function
+    | `O dict ->
+      begin try
+          let open OpamStd.Option.Op in
+          Base.of_json (List.assoc "base" dict) >>= fun base ->
+          OpamHash.of_json (List.assoc "md5" dict) >>= fun md5 ->
+          let perm =
+            if not (List.mem_assoc "perm" dict) then None
+            else match List.assoc "perm" dict with
+            | `String hash ->
+              (try Some (int_of_string hash) with _ -> raise Not_found)
+            | _ -> raise Not_found
+          in
+          Some { base; md5; perm }
+        with Not_found -> None
+      end
+    | _ -> None
+
   module O = struct
     type tmp = t
     type t = tmp
     let to_string = to_string
     let compare = compare
     let to_json = to_json
+    let of_json = of_json
   end
 
   module Set = OpamStd.Set.Make(O)

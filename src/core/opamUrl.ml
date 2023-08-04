@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -29,6 +29,9 @@ let empty = {
   hash = None;
 }
 
+exception Parse_error of string
+let parse_error s = raise (Parse_error s)
+
 let split_url =
   let re =
     Re.(compile @@ whole_string @@ seq [
@@ -53,7 +56,7 @@ let split_url =
       ])
   in
   fun u ->
-    match Re.get_all (Re.exec re u) with
+    match Re.Group.all (Re.exec re u) with
     | [| _; vc; transport; path; suffix; hash |] ->
       let opt = function "" -> None | s -> Some s in
       opt vc, opt transport, path, opt suffix, opt hash
@@ -63,7 +66,9 @@ let vc_of_string = function
   | "git" -> `git
   | "hg" -> `hg
   | "darcs" -> `darcs
-  | x -> failwith (Printf.sprintf "Unsupported version control system %S" x)
+  | vc ->
+    parse_error (Printf.sprintf "unsupported version control system %s"
+                (OpamConsole.colorise `underline vc))
 
 let string_of_vc = function
   | `git   -> "git"
@@ -82,7 +87,9 @@ let backend_of_string = function
   | "darcs" -> `darcs
   | "hg" -> `hg
   | "path" | "local" | "rsync" | "ssh" | "scp" | "sftp" -> `rsync
-  | p -> failwith (Printf.sprintf "Unsupported protocol %S" p)
+  | p ->
+    parse_error (Printf.sprintf "unsupported protocol %s"
+                (OpamConsole.colorise `underline p))
 
 
 let looks_like_ssh_path =
@@ -106,10 +113,11 @@ let looks_like_ssh_path =
   fun path ->
     try
       let sub = Re.exec re path in
-      Some (Re.get sub 1 ^ try "/" ^ Re.get sub 2 with Not_found -> "")
+      Some (Re.Group.get sub 1 ^
+            try "/" ^ Re.Group.get sub 2 with Not_found -> "")
     with Not_found -> None
 
-let parse ?backend ?(handle_suffix=true) s =
+let parse ?backend ?(handle_suffix=true) ?(from_file=true) s =
   let vc, transport, path, suffix, hash = split_url s in
   let backend =
     match backend with
@@ -121,17 +129,17 @@ let parse ?backend ?(handle_suffix=true) s =
         let of_suffix ~default =
           if not handle_suffix then default else
           match suffix with
-          | Some sf -> (try vc_of_string sf with Failure _ -> default)
+          | Some sf -> (try vc_of_string sf with Parse_error _ -> default)
           | None ->
             match OpamStd.String.cut_at path '@' with
             | Some (user, _) ->
-              (try vc_of_string user with Failure _ -> default)
+              (try vc_of_string user with Parse_error _ -> default)
             | None -> default
         in
         match transport with
         | None -> of_suffix ~default:`rsync
         | Some tr ->
-          try vc_of_string tr with Failure _ ->
+          try vc_of_string tr with Parse_error _ ->
             of_suffix ~default:(backend_of_string tr)
   in
   let transport, path =
@@ -142,6 +150,8 @@ let parse ?backend ?(handle_suffix=true) s =
       "ssh", path
     | _, (None | Some ("hg"|"darcs")), None ->
       "file", OpamSystem.real_path path |> OpamSystem.back_to_forward
+    | `rsync, Some "file", _ when not from_file ->
+      "file", OpamSystem.real_path path |> OpamSystem.back_to_forward
     | _, Some tr, _ ->
       tr, path
   in
@@ -151,6 +161,15 @@ let parse ?backend ?(handle_suffix=true) s =
     hash;
     backend;
   }
+
+let parse_opt ?(quiet=false) ?backend ?handle_suffix ?from_file s =
+  try
+    Some (parse ?backend ?handle_suffix ?from_file s)
+  with Parse_error pe ->
+    if not quiet then
+      OpamConsole.warning "URL parsing error on %s: %s"
+        (OpamConsole.colorise `underline s) pe;
+    None
 
 let of_string url = parse ~handle_suffix:false url
 
@@ -216,7 +235,7 @@ let basename =
   in
   fun t ->
     try
-      Re.get (Re.exec re t.path) 1
+      Re.Group.get (Re.exec re t.path) 1
     with Not_found -> ""
 
 let root =
@@ -235,13 +254,23 @@ let has_trailing_slash url =
   OpamStd.String.ends_with ~suffix:"/" url.path
 
 let to_json url = `String (to_string url)
+let of_json = function
+| `String s -> (try Some (of_string s) with _ -> None)
+| _ -> None
 
 type url = t
+
+let map_file_url f url =
+  if url.transport = "file" then
+    {url with path = f url.path}
+  else
+    url
 
 module O = struct
   type t = url
   let to_string = to_string
   let to_json = to_json
+  let of_json = of_json
   let compare = compare
 end
 

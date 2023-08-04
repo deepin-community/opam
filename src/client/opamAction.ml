@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -19,127 +19,223 @@ open OpamProcess.Job.Op
 
 module PackageActionGraph = OpamSolver.ActionGraph
 
-(* Install the package files *)
-let process_dot_install st nv build_dir =
+(* Preprocess install: returns a list of files to install, and their respective
+   install functions *)
+let preprocess_dot_install_t st nv build_dir =
+  if not (OpamFilename.exists_dir build_dir) then [], None else
   let root = st.switch_global.root in
-  if OpamStateConfig.(!r.dryrun) then
-    OpamConsole.msg "Installing %s.\n" (OpamPackage.to_string nv)
-  else
-  if OpamFilename.exists_dir build_dir then OpamFilename.in_dir build_dir (fun () ->
+  let switch_prefix = OpamPath.Switch.root root st.switch in
+  let file_wo_prefix f = OpamFilename.remove_prefix switch_prefix f in
 
-      log "Installing %s.\n" (OpamPackage.to_string nv);
-      let name = nv.name in
-      let config_f = OpamPath.Builddir.config build_dir nv in
-      let config = OpamFile.Dot_config.read_opt config_f in
-      let install_f = OpamPath.Builddir.install build_dir nv in
-      let install = OpamFile.Dot_install.safe_read install_f in
+  let name = nv.name in
+  let install_f = OpamPath.Builddir.install build_dir nv in
+  let install = OpamFile.Dot_install.safe_read install_f in
 
-      (* .install *)
-      let install_f = OpamPath.Switch.install root st.switch name in
-      if install <> OpamFile.Dot_install.empty then
-        OpamFile.Dot_install.write install_f install;
+  (* .install *)
+  let install_loc = OpamPath.Switch.install root st.switch name in
+  if install <> OpamFile.Dot_install.empty then
+    OpamFile.Dot_install.write install_loc install;
 
-      (* .config *)
-      (match config with
-       | Some config ->
+  (* .config *)
+  let (files_and_installs, config) =
+    let config_f = OpamPath.Builddir.config build_dir nv in
+    let config = OpamFile.Dot_config.read_opt config_f in
+    (match config with
+     | Some config ->
+       let file =
+         OpamPath.Switch.config root st.switch name
+         |> OpamFile.filename
+         |> file_wo_prefix
+       in
+       let inst _ =
          let dot_config = OpamPath.Switch.config root st.switch name in
-         OpamFile.Dot_config.write dot_config config
-       | None -> ());
+         OpamFile.Dot_config.write dot_config config; None
+       in
+       ([(file, inst)], Some config)
+     | None -> ([], None))
+  in
 
-      let warnings = ref [] in
-      let check ~src ~dst base =
-        let src_file = OpamFilename.create src base.c in
-        if base.optional && not (OpamFilename.exists src_file) then
-          log "Not installing %a is not present and optional."
-            (slog OpamFilename.to_string) src_file;
-        if not base.optional && not (OpamFilename.exists src_file) then (
-          warnings := (dst, base.c) :: !warnings
-        );
-        OpamFilename.exists src_file in
+  let check ~src ~dst base =
+    let src_file = OpamFilename.create src base.c in
+    if base.optional && not (OpamFilename.exists src_file) then
+      log "Not installing %a is not present and optional."
+        (slog OpamFilename.to_string) src_file;
+    let exists = OpamFilename.exists src_file in
+    let warn =
+      if not base.optional && not exists then
+        Some (dst, base.c) else None
+    in
+    exists, warn
+  in
 
-      (* Install a list of files *)
-      let install_files exec dst_fn files_fn =
-        let dst_dir = dst_fn root st.switch name in
-        let files = files_fn install in
-        if not (OpamFilename.exists_dir dst_dir) && files <> [] then (
-          log "creating %a" (slog OpamFilename.Dir.to_string) dst_dir;
-          OpamFilename.mkdir dst_dir;
-        );
-        List.iter (fun (base, dst) ->
-            let src_file = OpamFilename.create build_dir base.c in
-            let dst_file = match dst with
-              | None   -> OpamFilename.create dst_dir (OpamFilename.basename src_file)
-              | Some d -> OpamFilename.create dst_dir d in
-            if check ~src:build_dir ~dst:dst_dir base then
-              OpamFilename.install ~exec ~src:src_file ~dst:dst_file ();
-          ) files in
+  (* Install a list of files *)
+  let install_files (exec, dst_fn, files_fn) =
+    let dst_dir = dst_fn root st.switch name in
+    let files = files_fn install in
+    let dir_and_install =
+      if OpamFilename.exists_dir dst_dir || files = [] then [] else
+      let dir = OpamFilename.remove_prefix_dir switch_prefix dst_dir in
+      let inst _ =
+        log "creating %a" (slog OpamFilename.Dir.to_string) dst_dir;
+        OpamFilename.mkdir dst_dir;
+        None
+      in
+      [dir, inst]
+    in
+    dir_and_install @ List.rev @@
+    List.rev_map (fun (base, dst) ->
+        let (base, append) =
+          if exec &&
+             not (OpamFilename.exists (OpamFilename.create build_dir base.c))
+          then
+            let base' =
+              {base with c = OpamFilename.Base.add_extension base.c "exe"} in
+            if OpamFilename.exists (OpamFilename.create build_dir base'.c) then
+              (OpamConsole.warning
+                 ".install file is missing .exe extension for %s"
+                 (OpamFilename.Base.to_string base.c);
+               (base', true))
+            else
+              (base, false)
+          else
+            (base, false) in
+        let src_file = OpamFilename.create build_dir base.c in
+        let dst_file = match dst with
+          | None   -> OpamFilename.create dst_dir (OpamFilename.basename src_file)
+          | Some d ->
+            if append && not (OpamFilename.Base.check_suffix d ".exe") then
+              OpamFilename.create dst_dir
+                (OpamFilename.Base.add_extension d "exe")
+            else
+              OpamFilename.create dst_dir d in
+        let file = file_wo_prefix dst_file in
+        let inst warning =
+          if append then warning (OpamFilename.to_string src_file) `Add_exe;
+          let check, warn = check ~src:build_dir ~dst:dst_dir base in
+          if check then
+            OpamFilename.install ~warning ~exec ~src:src_file ~dst:dst_file ();
+          warn
+        in
+        file, inst)
+      files
+  in
 
-      let module P = OpamPath.Switch in
-      let module I = OpamFile.Dot_install in
-      let instdir_gen fpath r s _ = fpath r s st.switch_config in
-      let instdir_pkg fpath r s n = fpath r s st.switch_config n in
+  let module P = OpamPath.Switch in
+  let module I = OpamFile.Dot_install in
+  let instdir_gen fpath r s _ = fpath r s st.switch_config in
+  let instdir_pkg fpath r s n = fpath r s st.switch_config n in
 
-      (* bin *)
-      install_files true (instdir_gen P.bin) I.bin;
+  let to_install = [
+    (* bin *)
+    true, (instdir_gen P.bin), I.bin;
 
-      (* sbin *)
-      install_files true (instdir_gen P.sbin) I.sbin;
+    (* sbin *)
+    true, (instdir_gen P.sbin), I.sbin;
 
-      (* lib *)
-      install_files false (instdir_pkg P.lib) I.lib;
-      install_files true (instdir_pkg P.lib) I.libexec;
-      install_files false (instdir_gen P.lib_dir) I.lib_root;
-      install_files true (instdir_gen P.lib_dir) I.libexec_root;
+    (* lib *)
+    false, (instdir_pkg P.lib), I.lib;
+    true, (instdir_pkg P.lib), I.libexec;
+    false, (instdir_gen P.lib_dir), I.lib_root;
+    true, (instdir_gen P.lib_dir), I.libexec_root;
 
-      (* toplevel *)
-      install_files false (instdir_gen P.toplevel) I.toplevel;
+    (* toplevel *)
+    false, (instdir_gen P.toplevel), I.toplevel;
 
-      install_files true (instdir_gen P.stublibs) I.stublibs;
+    true, (instdir_gen P.stublibs), I.stublibs;
 
-      (* Man pages *)
-      install_files false (instdir_gen P.man_dir) I.man;
+    (* Man pages *)
+    false, (instdir_gen P.man_dir), I.man;
 
-      (* Shared files *)
-      install_files false (instdir_pkg P.share) I.share;
-      install_files false (instdir_gen P.share_dir) I.share_root;
+    (* Shared files *)
+    false, (instdir_pkg P.share), I.share;
+    false, (instdir_gen P.share_dir), I.share_root;
 
-      (* Etc files *)
-      install_files false (instdir_pkg P.etc) I.etc;
+    (* Etc files *)
+    false, (instdir_pkg P.etc), I.etc;
 
-      (* Documentation files *)
-      install_files false (instdir_pkg P.doc) I.doc;
+    (* Documentation files *)
+    false, (instdir_pkg P.doc), I.doc;
+  ]
+  in
 
-      (* misc *)
-      List.iter
-        (fun (src, dst) ->
+  let files_and_installs =
+    List.fold_left (fun acc toi -> List.rev_append (install_files toi) acc)
+      files_and_installs to_install
+  in
+
+  (* misc *)
+  let misc_files =
+    List.map (fun (src, dst) ->
+        let file = file_wo_prefix dst in
+        let inst warning =
           let src_file = OpamFilename.create (OpamFilename.cwd ()) src.c in
           if OpamFilename.exists dst
           && OpamConsole.confirm "Overwriting %s?" (OpamFilename.to_string dst) then
-            OpamFilename.install ~src:src_file ~dst ()
+            OpamFilename.install ~warning ~src:src_file ~dst ()
           else begin
             OpamConsole.msg "Installing %s to %s.\n"
               (OpamFilename.Base.to_string src.c) (OpamFilename.to_string dst);
             if OpamConsole.confirm "Continue?" then
-              OpamFilename.install ~src:src_file ~dst ()
-          end
-        ) (I.misc install);
-
-      if !warnings <> [] then (
-        let print (dir, base) =
-          Printf.sprintf "  - %s to %s\n"
-            (OpamFilename.to_string (OpamFilename.create build_dir base))
-            (OpamFilename.Dir.to_string dir) in
-        OpamConsole.error "Installation of %s failed"
-          (OpamPackage.to_string nv);
-        let msg =
-          Printf.sprintf
-            "Some files in %s couldn't be installed:\n%s"
-            (OpamFile.to_string install_f)
-            (String.concat "" (List.map print !warnings))
+              OpamFilename.install ~warning ~src:src_file ~dst ()
+          end;
+          None
         in
-        failwith msg
-      )
-    )
+        (file, inst)) (I.misc install)
+  in
+
+  List.rev_append files_and_installs misc_files, config
+
+(* Returns function to install package files from [.install] *)
+let preprocess_dot_install st nv build_dir =
+  let files_and_installs, config = preprocess_dot_install_t st nv build_dir in
+  let root = st.switch_global.root in
+  let files, installs = List.split files_and_installs in
+  let really_process_dot_install () =
+    if OpamStateConfig.(!r.dryrun) then
+      OpamConsole.msg "Installing %s.\n" (OpamPackage.to_string nv)
+    else if OpamFilename.exists_dir build_dir then
+      let (warning, had_windows_warnings) =
+        if OpamFormatConfig.(!r.strict) then
+          let had_warnings = ref false in
+          let install_warning dst warning =
+            let () =
+              match warning with
+              | `Add_exe | `Install_script | `Cygwin | `Cygwin_libraries ->
+                had_warnings := true
+              | _ ->
+                ()
+            in
+            OpamSystem.default_install_warning dst warning
+          in
+          (install_warning, (fun () -> !had_warnings))
+        else
+          (OpamSystem.default_install_warning, (fun () -> false))
+      in
+      OpamFilename.in_dir build_dir @@ fun () ->
+      log "Installing %s.\n" (OpamPackage.to_string nv);
+      let warnings =
+        OpamStd.List.filter_map (fun install -> install warning) installs
+      in
+      if warnings <> [] then
+        (let install_f = OpamPath.Switch.install root st.switch nv.name in
+         let print (dir, base) =
+           Printf.sprintf "  - %s to %s\n"
+             (OpamFilename.to_string (OpamFilename.create build_dir base))
+             (OpamFilename.Dir.to_string dir)
+         in
+         OpamConsole.error "Installation of %s failed"
+           (OpamPackage.to_string nv);
+         let msg =
+           Printf.sprintf
+             "Some files in %s couldn't be installed:\n%s"
+             (OpamFile.to_string install_f)
+             (String.concat "" (List.map print warnings))
+         in
+         failwith msg);
+      if had_windows_warnings () then
+        failwith "Strict mode is enabled - previous warnings considered fatal"
+  in
+  files, really_process_dot_install, config
 
 let download_package st nv =
   log "download_package: %a" (slog OpamPackage.to_string) nv;
@@ -150,48 +246,63 @@ let download_package st nv =
   if OpamPackage.Set.mem nv st.pinned &&
      OpamFilename.exists_dir dir &&
      OpamStd.Option.Op.(
-       OpamPinned.find_opam_file_in_source nv.name dir >>=
-       OpamFile.OPAM.read_opt >>=
+       OpamPinned.find_opam_file_in_source nv.name dir >>|
+       OpamFile.OPAM.safe_read >>=
        OpamFile.OPAM.version_opt)
      = Some nv.version
-  then
-    Done None
+  then Done None
   else
-    (OpamUpdate.cleanup_source st
-       (OpamPackage.Map.find_opt nv st.installed_opams)
-       (OpamSwitchState.opam st nv);
-     OpamProcess.Job.catch (fun e ->
-         let na =
-           match e with
-           | OpamDownload.Download_fail (s,l) -> (s,l)
-           | e -> (None, Printexc.to_string e)
-         in
-         Done (Some na))
-     @@ fun () ->
-     OpamUpdate.download_package_source st nv dir @@| function
-     | Some (Not_available (s,l)) -> Some (s,l)
-     | None | Some (Up_to_date () | Result ()) -> None)
+  let print_action msg =
+    OpamConsole.msg "%s retrieved %s.%s  (%s)\n"
+      (if not (OpamConsole.utf8 ()) then "->"
+       else OpamActionGraph.
+              (action_color (`Fetch ()) (action_strings (`Fetch ()))))
+      (OpamConsole.colorise `bold (OpamPackage.name_to_string nv))
+      (OpamPackage.version_to_string nv)
+      msg;
+  in
+  OpamUpdate.cleanup_source st
+    (OpamPackage.Map.find_opt nv st.installed_opams)
+    (OpamSwitchState.opam st nv);
+  OpamProcess.Job.catch (fun e ->
+      let na =
+        match e with
+        | OpamDownload.Download_fail (s,l) -> (s,l)
+        | e -> (None, Printexc.to_string e)
+      in
+      Done (Some na))
+  @@ fun () ->
+  OpamUpdate.download_package_source st nv dir @@| function
+  | Some (Not_available (s, l)), _ ->
+    let msg = match s with None -> l | Some s -> s in
+    OpamConsole.error "Failed to get sources of %s: %s"
+      (OpamPackage.to_string nv) msg;
+    Some (s, l)
+  | _, ((name, Not_available (s, l)) :: _) ->
+    let msg = match s with None -> l | Some s -> s in
+    OpamConsole.error "Failed to get extra source \"%s\" of %s: %s"
+      name (OpamPackage.to_string nv) msg;
+    Some (s, l)
+  | Some (Result msg), _ ->
+    print_action msg; None
+  | Some (Up_to_date msg), _ ->
+    print_action msg; None
+  | None, [] -> None
+  | None, (e :: es as extras) ->
+    if List.for_all (function _, Up_to_date _ -> true | _ -> false) extras then
+      print_action "cached"
+    else begin match e, es with
+      | (_, Result msg), [] -> print_action msg
+      | _, _ -> print_action (Printf.sprintf "%d extra sources" (List.length extras))
+    end;
+    None
 
 (* Prepare the package build:
    * apply the patches
    * substitute the files *)
-let prepare_package_build st nv dir =
-  let opam = OpamSwitchState.opam st nv in
-
+let prepare_package_build env opam nv dir =
   let patches = OpamFile.OPAM.patches opam in
 
-  let rec iter_patches f = function
-    | [] -> Done []
-    | (patchname,filter)::rest ->
-      if OpamFilter.opt_eval_to_bool (OpamPackageVar.resolve ~opam st) filter
-      then
-        OpamFilename.patch (dir // OpamFilename.Base.to_string patchname) dir
-        @@+ function
-        | None -> iter_patches f rest
-        | Some err ->
-          iter_patches f rest @@| fun e -> (patchname, err) :: e
-      else iter_patches f rest
-  in
   let print_apply basename =
     log "%s: applying %s.\n" (OpamPackage.name_to_string nv)
       (OpamFilename.Base.to_string basename);
@@ -200,21 +311,51 @@ let prepare_package_build st nv dir =
         (OpamConsole.colorise `green (OpamPackage.name_to_string nv))
         (OpamFilename.Base.to_string basename)
   in
+  let print_subst basename =
+    let file = OpamFilename.Base.to_string basename in
+    let file_in = file ^ ".in" in
+    log "%s: expanding opam variables in %s, generating %s.\n"
+      (OpamPackage.name_to_string nv)
+      file_in file;
+    if OpamConsole.verbose () then
+      OpamConsole.msg
+        "[%s: subst] expanding opam variables in %s, generating %s\n"
+        (OpamConsole.colorise `green (OpamPackage.name_to_string nv))
+        file_in file
+  in
 
-  if OpamStateConfig.(!r.dryrun) || OpamClientConfig.(!r.fake) then
-    iter_patches print_apply patches @@| fun _ -> None
-  else
-
+  let apply_patches ?(dryrun=false) () =
+    let patch base =
+      if dryrun then Done None else
+        OpamFilename.patch
+          (dir // OpamFilename.Base.to_string base) dir
+    in
+    let rec aux = function
+      | [] -> Done []
+      | (patchname,filter)::rest ->
+        if OpamFilter.opt_eval_to_bool env filter then
+          (print_apply patchname;
+           patch patchname @@+ function
+           | None -> aux rest
+           | Some err -> aux rest @@| fun e -> (patchname, err) :: e)
+        else aux rest
+    in
+    aux patches
+  in
   let subst_patches, subst_others =
     List.partition (fun f -> List.mem_assoc f patches)
       (OpamFile.OPAM.substs opam)
   in
+  if OpamStateConfig.(!r.dryrun) || OpamClientConfig.(!r.fake) then
+    (List.iter print_subst (OpamFile.OPAM.substs opam);
+     apply_patches ~dryrun:true ()) @@| fun _ -> None
+  else
   let subst_errs =
     OpamFilename.in_dir dir  @@ fun () ->
     List.fold_left (fun errs f ->
         try
-          OpamFilter.expand_interpolations_in_file
-            (OpamPackageVar.resolve ~opam st) f;
+          print_subst f;
+          OpamFilter.expand_interpolations_in_file env f;
           errs
         with e -> (f, e)::errs)
       [] subst_patches
@@ -224,25 +365,19 @@ let prepare_package_build st nv dir =
   let text =
     OpamProcess.make_command_text (OpamPackage.Name.to_string nv.name) "patch"
   in
-
-  OpamProcess.Job.with_text text @@
-  iter_patches (fun base ->
-      let patch = dir // OpamFilename.Base.to_string base in
-      print_apply base;
-      OpamFilename.patch patch dir)
-    patches
+  OpamProcess.Job.with_text text (apply_patches ())
   @@+ fun patching_errors ->
 
   (* Substitute the configuration files. We should be in the right
      directory to get the correct absolute path for the
-     substitution files (see [substitute_file] and
+     substitution files (see [OpamFilter.expand_interpolations_in_file] and
      [OpamFilename.of_basename]. *)
   let subst_errs =
     OpamFilename.in_dir dir @@ fun () ->
     List.fold_left (fun errs f ->
         try
-          OpamFilter.expand_interpolations_in_file
-            (OpamPackageVar.resolve ~opam st) f;
+          print_subst f;
+          OpamFilter.expand_interpolations_in_file env f;
           errs
         with e -> (f, e)::errs)
       subst_errs subst_others
@@ -300,24 +435,53 @@ let prepare_package_source st nv dir =
       (Done None) (OpamFile.OPAM.extra_sources opam)
   in
   let check_extra_files =
-    try
-      List.iter (fun (src,base,hash) ->
-          if not (OpamHash.check_file (OpamFilename.to_string src) hash) then
-            failwith
-              (Printf.sprintf "Bad hash for %s" (OpamFilename.to_string src))
+    let extra_files =
+      let extra_files =
+        OpamFile.OPAM.get_extra_files
+          ~repos_roots:(OpamRepositoryState.get_root st.switch_repos)
+          opam
+      in
+      if extra_files <> [] then extra_files else
+      match OpamFile.OPAM.extra_files opam with
+      | None -> []
+      | Some xs ->
+        (* lookup in switch-local hashmap overlay *)
+        let extra_files_dir =
+          OpamPath.Switch.extra_files_dir st.switch_global.root st.switch
+        in
+        OpamStd.List.filter_map (fun (base, hash) ->
+            let src =
+              OpamFilename.create extra_files_dir
+                (OpamFilename.Base.of_string (OpamHash.contents hash))
+            in
+            if OpamFilename.exists src then
+              Some (src, base, hash)
+            else None)
+          xs
+    in
+    let bad_hash =
+      OpamStd.List.filter_map (fun (src, base, hash) ->
+          if OpamHash.check_file (OpamFilename.to_string src) hash then
+            (OpamFilename.copy ~src ~dst:(OpamFilename.create dir base); None)
           else
-            OpamFilename.copy ~src ~dst:(OpamFilename.create dir base))
-        (OpamFile.OPAM.get_extra_files opam);
-      None
-    with e -> Some e
+            Some src) extra_files
+    in
+    if bad_hash = [] then None else
+      Some (Failure
+              (Printf.sprintf "Bad hash for %s"
+                 (OpamStd.Format.itemize OpamFilename.to_string bad_hash)));
   in
   OpamFilename.mkdir dir;
   get_extra_sources_job @@+ function Some _ as err -> Done err | None ->
     check_extra_files |> function Some _ as err -> Done err | None ->
-      prepare_package_build st nv dir
+      let opam = OpamSwitchState.opam st nv in
+      prepare_package_build (OpamPackageVar.resolve ~opam st) opam nv dir
 
 let compilation_env t opam =
-  OpamEnv.get_full ~force_path:true t ~updates:([
+  let open OpamParserTypes in
+  let scrub = OpamClientConfig.(!r.scrubbed_environment_variables) in
+  OpamEnv.get_full ~scrub ~set_opamroot:true ~set_opamswitch:true
+    ~force_path:true t ~updates:([
       "CDPATH", Eq, "", Some "shell env sanitization";
       "MAKEFLAGS", Eq, "", Some "make env sanitization";
       "MAKELEVEL", Eq, "", Some "make env sanitization";
@@ -327,6 +491,7 @@ let compilation_env t opam =
       "OPAM_PACKAGE_VERSION", Eq,
       OpamPackage.Version.to_string (OpamFile.OPAM.version opam),
       Some "build environment definition";
+      "OPAMCLI", Eq, "2.0", Some "opam CLI version";
     ] @
       OpamFile.OPAM.build_env opam)
 
@@ -359,12 +524,11 @@ let get_wrappers t =
     ~inner:(OpamFile.Switch_config.wrappers t.switch_config)
 
 let get_wrapper t opam wrappers ?local getter =
-  let root = t.switch_global.root in
-  let hook_vnam = OpamVariable.of_string "hooks" in
-  let hook_vval = Some (OpamVariable.dirname (OpamPath.hooks_dir root)) in
-  let local_env = match local with
-    | Some e -> OpamVariable.Map.add hook_vnam hook_vval e
-    | None ->OpamVariable.Map.singleton hook_vnam hook_vval
+  let local_env =
+    let hook_env = OpamEnv.hook_env t.switch_global.root in
+    match local with
+    | Some e -> OpamVariable.Map.union (fun _ v -> v) e hook_env
+    | None -> hook_env
   in
   OpamFilter.commands (OpamPackageVar.resolve ~local:local_env ~opam t)
     (getter wrappers) |>
@@ -402,16 +566,19 @@ let make_command st opam ?dir ?text_command (cmd, args) =
          OpamPackage.Set.(elements @@
                           inter st.compiler_packages st.installed_roots));
       if OpamPackage.Set.mem nv st.pinned then
-        match OpamFile.OPAM.get_url opam with
+        match OpamFile.OPAM.url opam with
         | None -> "pinned"
-        | Some u ->
+        | Some url ->
+          let u = OpamFile.URL.url url in
           let src =
             OpamPath.Switch.pinned_package st.switch_global.root st.switch
               nv.name
           in
           let rev = OpamProcess.Job.run (OpamRepository.revision src u) in
-          Printf.sprintf "pinned(%s%s)"
+          Printf.sprintf "pinned(%s%s%s)"
             (OpamUrl.to_string u)
+            (OpamStd.Option.to_string (fun s -> "("^s^")")
+               (OpamFile.URL.subpath url))
             (OpamStd.Option.to_string
                (fun r -> "#"^OpamPackage.Version.to_string r) rev)
       else
@@ -690,26 +857,36 @@ let build_package t ?(test=false) ?(doc=false) build_dir nv =
   let name = OpamPackage.name_to_string nv in
   let wrappers = get_wrappers t in
   let mk_cmd = make_command t opam ~dir:build_dir in
-  OpamProcess.Job.of_fun_list
-    (List.map (fun cmd () -> mk_cmd cmd)
-       (get_wrapper t opam wrappers OpamFile.Wrappers.pre_build) @
-     List.map (fun ((cmd,args) as ca) () ->
-         mk_cmd ~text_command:ca @@
-         cmd_wrapper t opam wrappers OpamFile.Wrappers.wrap_build cmd args)
-       commands)
-  @@+ fun result ->
-  let local =
-    opam_local_env_of_status OpamStd.Option.Op.(result >>| snd)
+  let jobs =
+    let check_result cmd r =
+      if OpamProcess.is_success r then Done None else Done (Some (cmd, r))
+    in
+    List.map (fun cmd -> function
+        | None -> let cmd = mk_cmd cmd in cmd @@> check_result cmd
+        | some -> Done some)
+      (get_wrapper t opam wrappers OpamFile.Wrappers.pre_build)
+    @
+    List.map (fun ((cmd,args) as cmd_args) -> function
+        | None ->
+          let base_cmd = OpamProcess.command cmd args in
+          (mk_cmd ~text_command:cmd_args @@
+           cmd_wrapper t opam wrappers OpamFile.Wrappers.wrap_build cmd args)
+          @@> check_result base_cmd
+        | some -> Done some)
+      commands
   in
+  OpamProcess.Job.seq jobs None @@+
+  fun result ->
+  let local = opam_local_env_of_status OpamStd.Option.Op.(result >>| snd) in
   OpamProcess.Job.of_fun_list ~keep_going:true
     (List.map (fun cmd () -> mk_cmd cmd)
        (get_wrapper t opam wrappers ~local OpamFile.Wrappers.post_build))
   @@+ fun post_result ->
   match result, post_result with
-  | Some (cmd, result), _ | None, Some (cmd, result) ->
+  | Some (cmd, result), _ | _, Some (cmd, result) ->
     OpamConsole.error
       "The compilation of %s failed at %S."
-      name (OpamProcess.string_of_command cmd);
+      (OpamPackage.to_string nv) (OpamProcess.string_of_command cmd);
     Done (Some (OpamSystem.Process_error result))
   | None, None ->
     if commands <> [] && OpamConsole.verbose () then
@@ -756,21 +933,46 @@ let install_package t ?(test=false) ?(doc=false) ?build_dir nv =
       )
     | [] -> Done None
   in
-  let install_job () =
-    (* let text = OpamProcess.make_command_text name "install" in
-     * OpamProcess.Job.with_text text *)
-    OpamProcess.Job.of_fun_list
-      (List.map (fun cmd () -> mk_cmd cmd)
-         (get_wrapper t opam wrappers OpamFile.Wrappers.pre_install))
-    @@+ fun error ->
-    (match error with
-     | None -> run_commands commands
-     | Some (_, result) -> Done (Some (OpamSystem.Process_error result)))
-    @@| function
-    | Some e -> Some e
-    | None -> try process_dot_install t nv dir; None with e -> Some e
+  let root = t.switch_global.root in
+  let switch_prefix = OpamPath.Switch.root root t.switch in
+  let pre_install_wrappers =
+    get_wrapper t opam wrappers OpamFile.Wrappers.pre_install
   in
-  let post_install error changes =
+  let pre_install () =
+    (* let text = OpamProcess.make_command_text name "install" in
+      * OpamProcess.Job.with_text text *)
+    OpamProcess.Job.of_fun_list
+      (List.map (fun cmd () -> mk_cmd cmd) pre_install_wrappers)
+  in
+  let install_job () =
+    pre_install ()
+    @@+ function
+    | Some (_, result) -> Done (Right (OpamSystem.Process_error result))
+    | None ->
+      run_commands commands @@| function
+      | Some e -> Right e
+      | None ->
+        try
+          let _, process_dot_install, config = preprocess_dot_install t nv dir in
+          process_dot_install ();
+          Left config
+        with e -> Right e
+  in
+  let install_and_track_job () =
+    pre_install ()
+    @@+ function
+    | Some (_, result) ->
+      Done (Right (OpamSystem.Process_error result), OpamStd.String.Map.empty)
+    | None ->
+      let installed_files, process_dot_install, config =
+        preprocess_dot_install t nv dir
+      in
+      OpamDirTrack.track_files ~prefix:switch_prefix installed_files
+        (fun () -> process_dot_install () ; Done None)
+      @@+ function
+      | _, changes -> Done (Left config, changes)
+  in
+  let post_install status changes =
     let local =
       let added =
         let open OpamDirTrack in
@@ -779,38 +981,49 @@ let install_package t ?(test=false) ?(doc=false) ?build_dir nv =
             | _ -> None)
           (OpamStd.String.Map.bindings changes)
       in
-      opam_local_env_of_status (match error with
-          | Some (OpamSystem.Process_error r) -> Some r
+      opam_local_env_of_status (match status with
+          | Right (OpamSystem.Process_error r) -> Some r
           | _ -> None) |>
       OpamVariable.Map.add
         (OpamVariable.of_string "installed-files")
         (Some (L added))
     in
+    let hooks =
+      get_wrapper t opam wrappers ~local OpamFile.Wrappers.post_install
+    in
+    let has_hooks = match hooks with [] -> false | _ -> true in
     OpamProcess.Job.of_fun_list ~keep_going:true
-      (List.map (fun cmd () -> mk_cmd cmd)
-         (get_wrapper t opam wrappers ~local OpamFile.Wrappers.post_install))
+      (List.map (fun cmd () -> mk_cmd cmd) hooks)
     @@+ fun error_post ->
-    match error, error_post with
-    | Some err, _ -> Done (Some err, changes)
-    | None, Some (_cmd, r) -> Done (Some (OpamSystem.Process_error r), changes)
-    | None, None -> Done (None, changes)
+    match status, error_post with
+    | Right err, _ -> Done (Right err, changes)
+    | _, Some (_cmd, r) -> Done (Right (OpamSystem.Process_error r), changes)
+    | Left config, None ->
+      let changes =
+        if has_hooks then
+          OpamDirTrack.update switch_prefix changes
+        else
+          changes
+      in
+      Done (Left config, changes)
   in
-  let root = t.switch_global.root in
-  let switch_prefix = OpamPath.Switch.root root t.switch in
   let rel_meta_dir =
     OpamFilename.(Base.of_string (remove_prefix_dir switch_prefix
                                     (OpamPath.Switch.meta root t.switch)))
   in
-  OpamDirTrack.track switch_prefix
-    ~except:(OpamFilename.Base.Set.singleton rel_meta_dir)
-    install_job
-  @@+ fun (error, changes) -> post_install error changes
+  (if commands = [] && pre_install_wrappers = [] then
+     install_and_track_job ()
+   else
+     OpamDirTrack.track switch_prefix
+       ~except:(OpamFilename.Base.Set.singleton rel_meta_dir)
+       install_job)
+  @@+ fun (status, changes) -> post_install status changes
   @@+ function
-  | Some e, changes ->
+  | Right e, changes ->
     remove_package t ~silent:true ~changes ~build_dir:dir nv @@+ fun () ->
     OpamStd.Exn.fatal e;
-    Done (Some e)
-  | None, changes ->
+    Done (Right e)
+  | Left config, changes ->
     let changes_f = OpamPath.Switch.changes root t.switch nv.name in
     OpamFile.Changes.write changes_f changes;
     OpamConsole.msg "%s installed %s.%s\n"
@@ -834,4 +1047,4 @@ let install_package t ?(test=false) ?(doc=false) ?build_dir nv =
         OpamConsole.warning "%s claims to be a plugin but no %s file was found"
           name (OpamFilename.to_string target)
     );
-    Done None
+    Done (Left config)

@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2018 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -29,6 +29,12 @@ val download_package:
 val prepare_package_source:
   rw switch_state -> package -> dirname -> exn option OpamProcess.job
 
+(** [prepare_package_build env opam pkg dir] is a lower level version
+    of `prepare_package_source`, without requiring a switch and
+    without handling extra downloads. *)
+val prepare_package_build:
+  OpamFilter.env -> OpamFile.OPAM.t -> package -> dirname -> exn option OpamProcess.job
+
 (** [build_package t build_dir pkg] builds the package [pkg] within [build_dir].
     Returns [None] on success, [Some exn] on error.
     See {!download_package} and {!prepare_package_source} for the previous
@@ -42,7 +48,7 @@ val build_package:
     metadata. See {!build_package} to build the package. *)
 val install_package:
   rw switch_state -> ?test:bool -> ?doc:bool -> ?build_dir:dirname -> package ->
-  exn option OpamProcess.job
+  (OpamFile.Dot_config.t option, exn) OpamCompat.Either.t OpamProcess.job
 
 (** Find out if the package source is needed for uninstall *)
 val removal_needs_download: 'a switch_state -> package -> bool

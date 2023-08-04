@@ -5,7 +5,7 @@
 
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2013 OCamlPro                                             *)
+(*    Copyright 2013-2016 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -94,8 +94,15 @@ OpamStd.String.Map.iter (fun c comp_file ->
             in
             OpamFilename.with_tmp_dir_job @@ fun dir ->
             try
+              (* Download to package.patch, rather than allowing the name to be
+                 guessed since, on Windows, some of the characters which are
+                 valid in URLs are not valid in filenames *)
+              let f =
+                let base = OpamFilename.Base.of_string "package.patch" in
+                OpamFilename.create dir base
+              in
               OpamProcess.Job.catch err
-                (OpamDownload.download ~overwrite:false url dir @@| fun f ->
+                (OpamDownload.download_as ~overwrite:false url f @@| fun () ->
                  Some (url, OpamFilename.digest f, None))
             with e -> err e)
         (OpamFile.Comp.patches comp)

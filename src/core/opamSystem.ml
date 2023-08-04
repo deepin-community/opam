@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -11,10 +11,15 @@
 
 open OpamCompat
 
+type install_warning =
+  [ `Add_exe | `Install_dll | `Install_script | `Install_unknown | `Cygwin | `Cygwin_libraries ]
+type install_warning_fn = string -> install_warning -> unit
+
 exception Process_error of OpamProcess.result
 exception Internal_error of string
 exception Command_not_found of string
 exception File_not_found of string
+exception Permission_denied of string
 
 let log ?level fmt = OpamConsole.log "SYSTEM" ?level fmt
 let slog = OpamConsole.slog
@@ -34,6 +39,9 @@ let raise_on_process_error r =
 
 let command_not_found cmd =
   raise (Command_not_found cmd)
+
+let permission_denied cmd =
+  raise (Permission_denied cmd)
 
 module Sys2 = struct
   (* same as [Sys.is_directory] except for symlinks, which returns always [false]. *)
@@ -82,7 +90,7 @@ let rm_command =
 let remove_dir dir =
   log "rmdir %s" dir;
   if Sys.file_exists dir then (
-    let err = Sys.command (Printf.sprintf "%s %s" rm_command dir) in
+    let err = Sys.command (Printf.sprintf "%s %s" rm_command (Filename.quote dir)) in
       if err <> 0 then
         internal_error "Cannot remove %s (error %d)." dir err
   )
@@ -167,6 +175,56 @@ let write file contents =
   output_string oc contents;
   close_out oc
 
+let setup_copy ?(chmod = fun x -> x) ~src ~dst () =
+  let ic = open_in_bin src in
+  try
+    let perm =
+      (Unix.fstat (Unix.descr_of_in_channel ic)).st_perm |> chmod
+    in
+    let () =
+      try if Unix.((lstat dst).st_kind <> S_REG) then
+            remove_file dst
+      with Unix.Unix_error(ENOENT, _, _) -> ()
+    in
+    let oc =
+      open_out_gen
+        [ Open_wronly; Open_creat; Open_trunc; Open_binary ]
+        perm dst
+    in
+    let fd = Unix.descr_of_out_channel oc in
+    try
+      if Unix.((fstat fd).st_perm) <> perm then
+        Unix.fchmod fd perm;
+      (ic, oc)
+    with exn ->
+      OpamStd.Exn.finalise exn (fun () -> close_out oc)
+  with exn ->
+    OpamStd.Exn.finalise exn (fun () -> close_in ic)
+
+let copy_channels =
+  let buf_len = 4096 in
+  let buf = Bytes.create buf_len in
+  let rec loop ic oc =
+    match input ic buf 0 buf_len with
+    | 0 -> ()
+    | n ->
+      output oc buf 0 n;
+      loop ic oc
+  in
+  loop
+
+let copy_file_aux ?chmod ~src ~dst () =
+  let close_channels ic oc =
+    OpamStd.Exn.finally (fun () -> close_in ic) (fun () -> close_out oc) in
+  try
+    let ic, oc = setup_copy ?chmod ~src ~dst () in
+    OpamStd.Exn.finally (fun () -> close_channels ic oc)
+      (fun () -> copy_channels ic oc);
+  with Unix.Unix_error _ as e ->
+    (* Remove the partial destination file, if any. *)
+    (try Unix.unlink dst with Unix.Unix_error _ -> ());
+    internal_error "Cannot copy %s to %s (%s)." src dst (Printexc.to_string e)
+
 let chdir dir =
   try Unix.chdir dir
   with Unix.Unix_error _ -> raise (File_not_found dir)
@@ -246,6 +304,10 @@ let with_tmp_dir fn =
     OpamStd.Exn.finalise e @@ fun () ->
     remove_dir dir
 
+let in_tmp_dir fn =
+  with_tmp_dir @@ fun dir ->
+    in_dir dir fn
+
 let with_tmp_dir_job fjob =
   let dir = mk_temp_dir () in
   mkdir dir;
@@ -296,8 +358,8 @@ let real_path p =
 
 type command = string list
 
-let default_env =
-  Unix.environment ()
+let default_env () =
+  OpamStd.Env.list () |> List.map (fun (var, v) -> var^"="^v) |> Array.of_list
 
 let env_var env var =
   let len = Array.length env in
@@ -327,7 +389,7 @@ let back_to_forward =
 
 (* OCaml 4.05.0 no longer follows the updated PATH to resolve commands. This
    makes unqualified commands absolute as a workaround. *)
-let resolve_command =
+let t_resolve_command =
   let is_external_cmd name =
     let name = forward_to_back name in
     OpamStd.String.contains_char name Filename.dir_sep.[0]
@@ -339,50 +401,95 @@ let resolve_command =
     else fun f ->
       try
         let open Unix in
-        let uid = getuid() and groups = Array.to_list(getgroups()) in
+        let uid = geteuid () in
+        let groups = OpamStd.IntSet.of_list (getegid () :: Array.to_list (getgroups ())) in
         let {st_uid; st_gid; st_perm; _} = stat f in
-        let mask = 0o001
-                   lor (if uid = st_uid then 0o100 else 0)
-                   lor (if List.mem st_gid groups then 0o010 else 0) in
-        (st_perm land mask) <> 0
+        let mask =
+          if uid = st_uid then
+            0o100
+          else if OpamStd.IntSet.mem st_gid groups then
+            0o010
+          else
+            0o001
+        in
+        if (st_perm land mask) <> 0 then
+          true
+        else
+          match OpamACL.get_acl_executable_info f st_uid with
+          | None -> false
+          | Some [] -> true
+          | Some gids -> OpamStd.IntSet.(not (is_empty (inter (of_list gids) groups)))
       with e -> OpamStd.Exn.fatal e; false
   in
   let resolve ?dir env name =
-    if not (Filename.is_relative name) then (* absolute path *)
-      if check_perms name then Some name else None
-    else if is_external_cmd name then (* relative *)
+    if not (Filename.is_relative name) then begin
+      (* absolute path *)
+      if not (Sys.file_exists name) then `Not_found
+      else if not (check_perms name) then `Denied
+      else `Cmd name
+    end else if is_external_cmd name then begin
+      (* relative path *)
       let cmd = match dir with
         | None -> name
         | Some d -> Filename.concat d name
       in
-      if check_perms cmd then Some cmd else None
-    else (* bare command, lookup in PATH *)
-    if Sys.win32 then
-      let path = OpamStd.Sys.split_path_variable (env_var env "PATH") in
-      let name =
-        if Filename.check_suffix name ".exe" then name else name ^ ".exe"
-      in
-      OpamStd.(List.find_opt (fun path ->
-          check_perms (Filename.concat path name))
-        path |> Option.map (fun path -> Filename.concat path name))
-    else
-    let cmd, args = "/bin/sh", ["-c"; Printf.sprintf "command -v %s" name] in
-    let r =
-      OpamProcess.run
-        (OpamProcess.command ~env ?dir
-           ~name:(temp_file ("command-"^(Filename.basename name)))
-           ~verbose:false cmd args)
+      if not (Sys.file_exists cmd) then `Not_found
+      else if not (check_perms cmd) then `Denied
+      else `Cmd cmd
+    end else
+    (* bare command, lookup in PATH *)
+    (* Following the shell sematics for looking up PATH, programs with the
+       expected name but not the right permissions are skipped silently.
+       Therefore, only two outcomes are possible in that case, [`Cmd ..] or
+       [`Not_found]. *)
+    let path = OpamStd.Sys.split_path_variable (env_var env "PATH") in
+    let name =
+      if Sys.win32 && not (Filename.check_suffix name ".exe") then
+        name ^ ".exe"
+      else name
     in
-    if OpamProcess.check_success_and_cleanup r then
-      match r.OpamProcess.r_stdout with
-      | cmdname::_ when cmdname = name || check_perms cmdname ->
-        (* "command -v echo" returns just echo, hence the first when check *)
-        Some cmdname
-      | _ -> None
-    else None
+    let possibles = OpamStd.List.filter_map (fun path ->
+        let candidate = Filename.concat path name in
+        if Sys.file_exists candidate then Some candidate else None) path
+    in
+    match List.find check_perms possibles with
+    | cmdname -> `Cmd cmdname
+    | exception Not_found ->
+      if possibles = [] then
+        `Not_found
+      else
+        `Denied
   in
-  fun ?(env=default_env) ?dir name ->
+  fun ?env ?dir name ->
+    let env = match env with None -> default_env () | Some e -> e in
     resolve env ?dir name
+
+let resolve_command ?env ?dir name =
+  match t_resolve_command ?env ?dir name with
+  | `Cmd cmd -> Some cmd
+  | `Denied | `Not_found -> None
+
+let apply_cygpath name =
+  let r =
+    OpamProcess.run
+      (OpamProcess.command ~name:(temp_file "command") ~verbose:false "cygpath" ["--"; name])
+  in
+  OpamProcess.cleanup ~force:true r;
+  if OpamProcess.is_success r then
+    List.hd r.OpamProcess.r_stdout
+  else
+    OpamConsole.error_and_exit `Internal_error "Could not apply cygpath to %s" name
+
+let get_cygpath_function =
+  if Sys.win32 then
+    fun ~command ->
+      lazy (if OpamStd.(Option.map_default Sys.is_cygwin_variant `Native (resolve_command command)) = `Cygwin then
+              apply_cygpath
+            else
+              fun x -> x)
+  else
+    let f = Lazy.from_val (fun x -> x) in
+    fun ~command:_ -> f
 
 let runs = ref []
 let print_stats () =
@@ -395,9 +502,10 @@ let print_stats () =
 let log_file ?dir name = temp_file ?dir (OpamStd.Option.default "log" name)
 
 let make_command
-    ?verbose ?(env=default_env) ?name ?text ?metadata ?allow_stdin ?stdout
+    ?verbose ?env ?name ?text ?metadata ?allow_stdin ?stdout
     ?dir ?(resolve_path=true)
     cmd args =
+  let env = match env with None -> default_env () | Some e -> e in
   let name = log_file name in
   let verbose =
     OpamStd.Option.default OpamCoreConfig.(!r.verbose_level >= 2) verbose
@@ -406,19 +514,20 @@ let make_command
   if None <> try Some (String.index cmd ' ') with Not_found -> None then
     OpamConsole.warning "Command %S contains space characters" cmd;
   let full_cmd =
-    if resolve_path then resolve_command ~env ?dir cmd
-    else Some cmd
+    if resolve_path then t_resolve_command ~env ?dir cmd
+    else `Cmd cmd
   in
   match full_cmd with
-  | Some cmd ->
+  | `Cmd cmd ->
     OpamProcess.command
       ~env ~name ?text ~verbose ?metadata ?allow_stdin ?stdout ?dir
       cmd args
-  | None ->
-    command_not_found cmd
+  | `Not_found -> command_not_found cmd
+  | `Denied -> permission_denied cmd
 
 let run_process
-    ?verbose ?(env=default_env) ~name ?metadata ?stdout ?allow_stdin command =
+    ?verbose ?env ~name ?metadata ?stdout ?allow_stdin command =
+  let env = match env with None -> default_env () | Some e -> e in
   let chrono = OpamConsole.timer () in
   runs := command :: !runs;
   match command with
@@ -428,8 +537,8 @@ let run_process
     if OpamStd.String.contains_char cmd ' ' then
       OpamConsole.warning "Command %S contains space characters" cmd;
 
-    match resolve_command ~env cmd with
-    | Some full_cmd ->
+    match t_resolve_command ~env cmd with
+    | `Cmd full_cmd ->
       let verbose = match verbose with
         | None   -> OpamCoreConfig.(!r.verbose_level) >= 2
         | Some b -> b in
@@ -441,12 +550,12 @@ let run_process
              full_cmd args)
       in
       let str = String.concat " " (cmd :: args) in
-      log "[%a] (in %.3fs) %s"
+      log ~level:2 "[%a] (in %.3fs) %s"
         (OpamConsole.slog Filename.basename) name
         (chrono ()) str;
       r
-    | None ->
-      command_not_found cmd
+    | `Not_found -> command_not_found cmd
+    | `Denied -> permission_denied cmd
 
 let command ?verbose ?env ?name ?metadata ?allow_stdin cmd =
   let name = log_file name in
@@ -488,6 +597,12 @@ let read_command_output ?verbose ?env ?metadata ?allow_stdin cmd =
 let verbose_for_base_commands () =
   OpamCoreConfig.(!r.verbose_level) >= 3
 
+let cygify f =
+  if Sys.win32 then
+    List.map (Lazy.force f)
+  else
+    fun x -> x
+
 let copy_file src dst =
   if (try Sys.is_directory src
       with Sys_error _ -> raise (File_not_found src))
@@ -497,7 +612,8 @@ let copy_file src dst =
   if file_or_symlink_exists dst
   then remove_file dst;
   mkdir (Filename.dirname dst);
-  command ~verbose:(verbose_for_base_commands ()) ["cp"; src; dst ]
+  log "copy %s -> %s" src dst;
+  copy_file_aux ~src ~dst ()
 
 let copy_dir src dst =
   if Sys.file_exists dst then
@@ -514,10 +630,12 @@ let copy_dir src dst =
      command ~verbose:(verbose_for_base_commands ())
        [ "cp"; "-PRp"; src; dst ])
 
-let mv src dst =
+let mv_aux f src dst =
   if file_or_symlink_exists dst then remove_file dst;
   mkdir (Filename.dirname dst);
-  command ~verbose:(verbose_for_base_commands ()) ["mv"; src; dst ]
+  command ~verbose:(verbose_for_base_commands ()) ("mv"::(cygify f [src; dst]))
+
+let mv = mv_aux (get_cygpath_function ~command:"mv")
 
 let is_exec file =
   let stat = Unix.stat file in
@@ -526,7 +644,90 @@ let is_exec file =
 
 let file_is_empty f = Unix.((stat f).st_size = 0)
 
-let install ?exec src dst =
+let classify_executable file =
+  let c = open_in file in
+  (* On a 32-bit system, this could fail for a PE image with a 2GB+ DOS header =-o *)
+  let input_int_little c =
+    let b1 = input_byte c in
+    let b2 = input_byte c in
+    let b3 = input_byte c in
+    let b4 = input_byte c in
+    b1 lor (b2 lsl 8) lor (b3 lsl 16) lor (b4 lsl 24) in
+  let input_short_little c =
+    let b1 = input_byte c in
+    let b2 = input_byte c in
+    b1 lor (b2 lsl 8) in
+  set_binary_mode_in c true;
+  try
+    match really_input_string c 2 with
+      "#!" ->
+        close_in c;
+        `Script
+    | "MZ" ->
+        let is_pe =
+          try
+            (* Offset to PE header at 0x3c (but we've already read two bytes) *)
+            ignore (really_input_string c 0x3a);
+            ignore (really_input_string c (input_int_little c - 0x40));
+            let magic = really_input_string c 4 in
+            magic = "PE\000\000"
+          with End_of_file ->
+            close_in c;
+            false in
+        if is_pe then
+          try
+            let arch =
+              (* NB It's not necessary to determine PE/PE+ headers for x64/x86 determination *)
+              match input_short_little c with
+                0x8664 ->
+                  `x86_64
+              | 0x14c ->
+                  `x86
+              | _ ->
+                  raise End_of_file
+            in
+            ignore (really_input_string c 14);
+            let size_of_opt_header = input_short_little c in
+            let characteristics = input_short_little c in
+            (* Executable images must have a PE "optional" header and be marked executable *)
+            (* Could also validate IMAGE_FILE_32BIT_MACHINE (0x100) for x86 and IMAGE_FILE_LARGE_ADDRESS_AWARE (0x20) for x64 *)
+            if size_of_opt_header <= 0 || characteristics land 0x2 = 0 then
+              raise End_of_file;
+            close_in c;
+            if characteristics land 0x2000 <> 0 then
+              `Dll arch
+            else
+              `Exe arch
+          with End_of_file ->
+            close_in c;
+            `Unknown
+        else
+          `Exe `i386
+    | _ ->
+        close_in c;
+        `Unknown
+  with End_of_file ->
+    close_in c;
+    `Unknown
+
+let default_install_warning dst = function
+| `Add_exe ->
+    OpamConsole.warning "Automatically adding .exe to %s" dst
+| `Install_dll ->
+    (* TODO Installation of .dll to bin is unfortunate, but not sure if it should be a warning *)
+    ()
+| `Install_script ->
+    (* TODO Generate a .cmd wrapper (and warn about it - they're not perfect) *)
+    OpamConsole.warning "%s is a script; the command won't be available" dst;
+| `Install_unknown ->
+    (* TODO Installation of a non-executable file is unexpected, but not sure if it should be a warning/error *)
+    ()
+| `Cygwin ->
+    OpamConsole.warning "%s is a Cygwin-linked executable" dst
+| `Cygwin_libraries ->
+    OpamConsole.warning "%s links with a Cygwin-compiled DLL (almost certainly a packaging or environment error)" dst
+
+let install ?(warning=default_install_warning) ?exec src dst =
   if Sys.is_directory src then
     internal_error "Cannot install %s: it is a directory." src;
   if (try Sys.is_directory dst with Sys_error _ -> false) then
@@ -535,8 +736,41 @@ let install ?exec src dst =
   let exec = match exec with
     | Some e -> e
     | None -> is_exec src in
-  command ("install" :: "-m" :: (if exec then "0755" else "0644") ::
-     [ src; dst ])
+  let perm = if exec then 0o755 else 0o644 in
+  log "install %s -> %s (%o)" src dst perm;
+  if Sys.win32 then
+    if exec then begin
+      let (dst, cygcheck) =
+        match classify_executable src with
+          `Exe _ ->
+            if not (Filename.check_suffix dst ".exe") && not (Filename.check_suffix dst ".dll") then begin
+              warning dst `Add_exe;
+              (dst ^ ".exe", true)
+            end else
+              (dst, true)
+        | `Dll _ ->
+            warning dst `Install_dll;
+            (dst, true)
+        | `Script ->
+            warning dst `Install_script;
+            (dst, false)
+        | `Unknown ->
+            warning dst `Install_unknown;
+            (dst, false)
+      in
+      copy_file_aux ~src ~dst ();
+      if cygcheck then
+        match OpamStd.Sys.is_cygwin_variant dst with
+          `Native ->
+            ()
+        | `Cygwin ->
+            warning dst `Cygwin
+        | `CygLinked ->
+            warning dst `Cygwin_libraries
+    end else
+      copy_file_aux ~src ~dst ()
+  else
+    copy_file_aux ~chmod:(fun _ -> perm) ~src ~dst ()
 
 let cpu_count () =
   try
@@ -628,18 +862,37 @@ module Tar = struct
         Some (Printf.sprintf "Tar needs %s to extract the archive" cmd)
       else None)
 
-  let extract_command file =
-    OpamStd.Option.Op.(
-      get_type file >>| fun typ ->
-      let tar_cmd =
-        match OpamStd.Sys.os () with
-        | OpamStd.Sys.OpenBSD -> "gtar"
-        | _ -> "tar"
-      in
-      let command c dir =
-        make_command tar_cmd [ Printf.sprintf "xf%c" c ; file; "-C" ; dir ]
-      in
-      command (extract_option typ))
+  let tar_cmd = lazy (
+    match OpamStd.Sys.os () with
+    | OpamStd.Sys.OpenBSD -> "gtar"
+    | _ -> "tar"
+  )
+
+  let cygpath_tar = lazy (
+    Lazy.force (get_cygpath_function ~command:(Lazy.force tar_cmd))
+  )
+
+  let extract_command =
+    fun file ->
+      OpamStd.Option.Op.(
+        get_type file >>| fun typ ->
+        let f = Lazy.force cygpath_tar in
+        let tar_cmd = Lazy.force tar_cmd in
+        let command c dir =
+          make_command tar_cmd [ Printf.sprintf "xf%c" c ; f file; "-C" ; f dir ]
+        in
+        command (extract_option typ))
+
+  let compress_command =
+    fun file dir ->
+      let f = Lazy.force cygpath_tar in
+      let tar_cmd = Lazy.force tar_cmd in
+      make_command tar_cmd [
+        "cfz"; f file;
+        "-C" ; f (Filename.dirname dir);
+        f (Filename.basename dir)
+      ]
+
 end
 
 module Zip = struct
@@ -666,6 +919,16 @@ let is_archive file =
 let extract_command file =
   if Zip.is_archive file then Zip.extract_command file
   else Tar.extract_command file
+
+let make_tar_gz_job ~dir file =
+  let tmpfile = file ^ ".tmp" in
+  remove_file tmpfile;
+  Tar.compress_command tmpfile dir @@> fun r ->
+  OpamProcess.cleanup r;
+  if OpamProcess.is_success r then
+    (mv tmpfile file; Done None)
+  else
+    (remove_file tmpfile; Done (Some (Process_error r)))
 
 let extract_job ~dir file =
   if not (Sys.file_exists file) then
@@ -1260,11 +1523,12 @@ let register_printer () =
     | Process_error r     -> Some (OpamProcess.result_summary r)
     | Internal_error m    -> Some m
     | Command_not_found c -> Some (Printf.sprintf "%S: command not found." c)
+    | Permission_denied c -> Some (Printf.sprintf "%S: permission denied." c)
     | Sys.Break           -> Some "User interruption"
     | Unix.Unix_error (e, fn, msg) ->
       let msg = if msg = "" then "" else " on " ^ msg in
       let error = Printf.sprintf "%s: %S failed%s: %s"
-          Sys.argv.(0) fn msg (Unix.error_message e) in
+          Sys.executable_name fn msg (Unix.error_message e) in
       Some error
     | _ -> None
   )
@@ -1274,3 +1538,6 @@ let init () =
   Sys.catch_break true;
   try Sys.set_signal Sys.sigpipe (Sys.Signal_handle (fun _ -> ()))
   with Invalid_argument _ -> ()
+
+let () =
+  OpamProcess.set_resolve_command resolve_command

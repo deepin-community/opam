@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -16,8 +16,10 @@ module type VERTEX = sig
   include Graph.Sig.COMPARABLE with type t := t
 end
 
+type dependency_label = unit
+
 module type G = sig
-  include Graph.Sig.I
+  include Graph.Sig.I with type E.label = dependency_label
   module Vertex: VERTEX with type t = V.t
   module Topological: sig
     val fold: (V.t -> 'a -> 'a) -> t -> 'a -> 'a
@@ -33,7 +35,8 @@ exception Aborted
 (** Simply parallel execution of tasks *)
 
 (** In the simple iter, map and reduce cases, ints are the indexes of the jobs
-    in the list *)
+    in the list. First list is return code of sucessfull commands, second those
+    which raised expcetions, and third one those which were canceled. *)
 exception Errors of int list * (int * exn) list * int list
 
 val iter: jobs:int -> command:('a -> unit OpamProcess.job) -> ?dry_run:bool ->
@@ -53,13 +56,17 @@ module type SIG = sig
   module G : G
 
   (** Runs the job [command ~pred v] for every node [v] in a graph, in
-      topological order, using [jobs] concurrent processes. [pred] is the
-      associative list of job results on direct predecessors of [v]. *)
+      topological order using [jobs] concurrent processes. Separate (possibly
+      intersecting) node pools can be specified, with a separate number of
+      allowed processes. The [jobs] maximum applies to the remaining nodes.
+
+      The [pred] argument provided to the [command] function is the associative
+      list of job results on direct predecessors of [v]. *)
   val iter:
     jobs:int ->
     command:(pred:(G.V.t * 'a) list -> G.V.t -> 'a OpamProcess.job) ->
     ?dry_run:bool ->
-    ?mutually_exclusive:(G.V.t list list) ->
+    ?pools:((G.V.t list * int) list) ->
     G.t ->
     unit
 
@@ -69,7 +76,7 @@ module type SIG = sig
     jobs:int ->
     command:(pred:(G.V.t * 'a) list -> G.V.t -> 'a OpamProcess.job) ->
     ?dry_run:bool ->
-    ?mutually_exclusive:(G.V.t list list) ->
+    ?pools:((G.V.t list * int) list) ->
     G.t ->
     (G.V.t * 'a) list
 
@@ -86,7 +93,7 @@ module Make (G : G) : SIG with module G = G
                            and type G.V.t = G.V.t
 
 module type GRAPH = sig
-  include Graph.Sig.I
+  include Graph.Sig.I with type E.label = dependency_label
   include Graph.Oper.S with type g = t
   module Topological : sig
     val fold : (V.t -> 'a -> 'a) -> t -> 'a -> 'a
@@ -96,6 +103,10 @@ module type GRAPH = sig
                          and type G.V.t = vertex
   module Dot : sig val output_graph : out_channel -> t -> unit end
   val transitive_closure:  ?reflexive:bool -> t -> unit
+  val build: V.t list -> E.t list -> t
+  val compare : t -> t -> int
+  val to_json : t OpamJson.encoder
+  val of_json : t OpamJson.decoder
 end
 
 module MakeGraph (V: VERTEX) : GRAPH with type V.t = V.t

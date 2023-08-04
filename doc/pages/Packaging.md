@@ -7,7 +7,7 @@ definition, testing it, and publishing to the
 
 ## Creating a package definition file
 
-For complete documentation of the format, see [the manual](Manual.html#Packagedefinitions).
+For complete documentation of the format, see [the manual](Manual.html#Package-definitions).
 
 If your project does not yet have a package definition, get to the root of its
 source, and then either
@@ -44,10 +44,12 @@ your project uses [`dune`](https://github.com/ocaml/dune), skip `install:` and
 use:
 
 ```
-build: ["dune" "build" "-p" name]
+build: ["dune" "build" "-p" name "-j" jobs]
 ```
 
 See [below](#The-file-format-in-more-detail) for more on the format.
+It is recommended to use [`opam lint`](man/opam-lint.html) to check the
+validity of your opam file.
 
 ## Testing
 
@@ -75,7 +77,7 @@ publish --help` for more options.
 First tag the project. Assuming this is version 0.1:
 ```
 git tag -a 0.1
-git push 0.1
+git push origin 0.1
 ```
 Alternatively, you can create a release using the web UI
 (https://github.com/USER/REPO/releases/new).
@@ -97,6 +99,10 @@ package definitions in the current directory rather than in the archive.
 > `opam publish` can be re-run any number of times to update an existing
 > submission, or propose changes to an already released package.
 
+> To fill the pull request, `opam publish` clones _opam repository_ over ssh,
+> you need to have your *ssh keys* registered in your [Github
+> account](https://help.github.com/en/articles/connecting-to-github-with-ssh).
+
 ### Without opam-publish
 
 First, you will need to add a section in the following format to the package
@@ -113,7 +119,7 @@ top-right. Clone the resulting repository, add your package definition, and
 push back, as such:
 
 ```
-git clone git@github.com:USER/opam-repository --branch 2.0.0
+git clone git@github.com:USER/opam-repository
 cd opam-repository
 cp OPAM_FILE packages/NAME/NAME.VERSION/opam
 git add packages
@@ -123,9 +129,6 @@ git push origin HEAD:add-pkg-NAME
 
 Then, back to the web UI, Github should propose to file a pull-request for your
 newly pushed branch. If not, select the `new pull request` button on the left.
-Make sure to file your pull-request against the `2.0.0` base branch, since
-package definitions in 1.2 format are not yet accepted on `master`.
-
 
 ## The file format in more detail
 
@@ -136,7 +139,8 @@ remove the others rather than leave them empty.
 * `synopsis` should be a one-line description of what your package does, used in
   listings. It is recommended to also add a `description` field for a longer
   explanation (hint: you may delimit long strings with triple-quotation mark
-  delimiters `"""` to avoid escaping issues).
+  delimiters `"""` to avoid escaping issues). Since opam 2.0.1, linting requires
+  to have at least synopsis or description filled.
 * You'll probably be the `maintainer` for now, so give a way to contact you in
   case your package needs maintenance.
 * Most interesting is the `build` field, that tells opam how to compile the
@@ -144,9 +148,9 @@ remove the others rather than leave them empty.
   containing arguments either as a string (`"./configure"`) or a variable name
   (`make`, defined by default to point at the chosen "make" command -- think
   `$(MAKE)` in Makefiles). `%{prefix}%` is another syntax to replace variables
-  within strings. `opam config list` will give you a list of available
-  variables. `build` instructions shouldn't need to write outside of the
-  package's source directory.
+  within strings. `opam config list` (or `opam var` with opam 2.1.0) will give
+  you a list of available variables. `build` instructions shouldn't need to
+  write outside of the package's source directory.
 * `install` is similar to `build`, but tells opam how to install. The example
   above should indeed be `install: [ [make "install"] ]`, but the extra square
   brackets are optional when there is a single element. This field can be
@@ -176,15 +180,15 @@ installed files is done automatically, so that should only be needed if your
 This is just a very short introduction, don't be afraid to consult
 [the reference](Manual.html#opam) for details and more:
 
-* [**Version constraints**](Manual.html#PackageFormulas): an optional version
+* [**Version constraints**](Manual.html#Package-Formulas): an optional version
   constraint can be added after any package name in `depends`: simply write
   `"package" {>= "3.2"}`. Warning, versions are strings too, don't forget the
   quotes.
-* [**Formulas**](Manual.html#PackageFormulas): depends are by default a
+* [**Formulas**](Manual.html#Package-Formulas): depends are by default a
   conjunction (all of them are required), but you can use the logical "and" `&`
   and "or" `|` operators, and even group with parentheses. The same is true for
   version constraints: `("pkg1" & "pkg2") | "pkg3" {>= "3.2" & != "3.7"}`.
-* [**Build depends**](Manual.html#Filteredpackageformulas): you may add, among
+* [**Build depends**](Manual.html#Filtered-package-formulas): you may add, among
   others, the key `build` in the version constraints, _e.g._
   `"package" {build & >= "3.2"}`, to indicate that there is no run-time
   dependency to this package: it is required but won't trigger rebuilds of your
@@ -206,7 +210,8 @@ This is just a very short introduction, don't be afraid to consult
   package formula like `depends`. simple list of package names. If you require
   specific versions, add a `conflicts` field with the ones that won't work.
 * [**Variables**](Manual.html#Variables): you can get a list of predefined
-  variables that you can use in your opam rules with `opam config list`.
+  variables that you can use in your opam rules with `opam config list` (or
+  `opam var` with opam 2.1.0).
 * [**Filters**](Manual.html#Filters): dependencies, commands and single command
   arguments may need to be omitted depending on the environment. This uses the
   same optional argument syntax as above, postfix curly braces, with boolean
@@ -214,6 +219,6 @@ This is just a very short introduction, don't be afraid to consult
 
     ```
     ["./configure" "--with-foo" {ocaml-version > "3.12"} "--prefix=%{prefix}%"]
-    [make "byte"] { !ocaml-native }
-    [make "native"] { ocaml-native }
+    [make "byte"] { !ocaml:native }
+    [make "native"] { ocaml:native }
     ```

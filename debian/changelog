@@ -1,3 +1,25 @@
+opam (2.1.2-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+
+ -- Stéphane Glondu <glondu@debian.org>  Mon, 14 Feb 2022 15:58:35 +0100
+
+opam (2.0.10-1) unstable; urgency=medium
+
+  [ Stéphane Glondu ]
+  * Team upload
+  * New upstream release
+  * Bump Standards-Version to 4.6.0
+  * Bump debhelper compat level to 13
+  * Update debian/watch
+
+  [ Alexander Volkov ]
+  * Do not build opam-doc when nodoc profile is enabled
+  * Move opam-doc from Depends to Suggests
+
+ -- Stéphane Glondu <glondu@debian.org>  Wed, 01 Dec 2021 16:59:38 +0100
+
 opam (2.0.8-1) unstable; urgency=medium
 
   * New (bugfix) upstream release

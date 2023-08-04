@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -15,19 +15,16 @@
 open OpamTypes
 
 (** Get the list of packages *)
-val packages: repository -> package_set
+val packages: dirname -> package_set
 
 (** Get the list of packages (and their possible prefix) *)
-val packages_with_prefixes: repository -> string option package_map
+val packages_with_prefixes: dirname -> string option package_map
 
 (** {2 Repository backends} *)
 
-(** Initialize {i $opam/repo/$repo} *)
-val init: dirname -> repository_name -> unit OpamProcess.job
-
 (** Update {i $opam/repo/$repo}. Raises [Failure] in case the update couldn't be
     achieved. *)
-val update: repository -> unit OpamProcess.job
+val update: repository -> dirname -> unit OpamProcess.job
 
 (** Fetch an URL and put the resulting tree into the supplied directory. The URL
     must either point to a tree (VCS, rsync) or to a known archive type. In case
@@ -36,8 +33,8 @@ val update: repository -> unit OpamProcess.job
     or synchronised directly if local and [working_dir] was set. *)
 val pull_tree:
   string -> ?cache_dir:dirname -> ?cache_urls:url list -> ?working_dir:bool ->
-  dirname -> OpamHash.t list -> url list ->
-  unit download OpamProcess.job
+  ?subpath:string -> dirname -> OpamHash.t list -> url list ->
+  string download OpamProcess.job
 
 (** Same as [pull_tree], but for fetching a single file. *)
 val pull_file:
@@ -49,7 +46,7 @@ val pull_file:
     is present in the cache. *)
 val pull_file_to_cache:
   string -> cache_dir:dirname -> ?cache_urls:url list ->
-  OpamHash.t list -> url list -> unit download OpamProcess.job
+  OpamHash.t list -> url list -> string download OpamProcess.job
 
 (** The file where the file with the given hash is stored under cache at given
     dirname. *)
@@ -64,8 +61,11 @@ val current_branch: url -> string option OpamProcess.job
 
 (** Returns true if the url points to a local, version-controlled directory that
     has uncommitted changes *)
-val is_dirty: url -> bool OpamProcess.job
+val is_dirty: ?subpath:string -> url -> bool OpamProcess.job
 
 (** Find a backend *)
 val find_backend: repository -> (module OpamRepositoryBackend.S)
 val find_backend_by_kind: OpamUrl.backend -> (module OpamRepositoryBackend.S)
+
+(** Prints user messages upon the result of a download *)
+val report_fetch_result: package -> string download -> unit download

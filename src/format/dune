@@ -6,7 +6,8 @@
   (modules_without_implementation OpamTypes)
   (flags       (:standard
                (:include ../ocaml-flags-standard.sexp)
+               (:include ../ocaml-flags-configure.sexp)
                (:include ../ocaml-context-flags.sexp)))
   (wrapped     false))
 
-(ocamllex opamLineLexer)
+(ocamllex opamLineLexer opamInterpLexer)

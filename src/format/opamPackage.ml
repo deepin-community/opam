@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -36,14 +36,21 @@ module Version = struct
 
   let compare = OpamVersionCompare.compare
 
+  let equal v1 v2 =
+    compare v1 v2 = 0
+
   let to_json x =
     `String (to_string x)
+  let of_json = function
+    | `String x -> (try Some (of_string x) with _ -> None)
+    | _ -> None
 
   module O = struct
     type t = version
     let to_string = to_string
     let compare = compare
     let to_json = to_json
+    let of_json = of_json
   end
 
   module Set = OpamStd.Set.Make(O)
@@ -76,18 +83,22 @@ module Name = struct
     | Some true ->
       x
 
-  let compare n1 n2 =
-    match compare (String.lowercase_ascii n1) (String.lowercase_ascii n2) with
-    | 0 -> compare n1 n2
-    | i -> i
+  let compare = OpamStd.String.compare_case
+
+  let equal n1 n2 =
+    compare n1 n2 = 0
 
   let to_json x = `String x
+  let of_json = function
+    | `String s -> (try Some (of_string s) with _ -> None)
+    | _ -> None
 
   module O = struct
     type t = string
     let to_string = to_string
     let compare = compare
     let to_json = to_json
+    let of_json = of_json
   end
 
   module Set = OpamStd.Set.Make(O)
@@ -145,6 +156,16 @@ let to_json nv =
   `O [ ("name", Name.to_json (name nv));
        ("version", Version.to_json (version nv));
      ]
+let of_json = function
+  | `O dict ->
+    begin try
+        let open OpamStd.Option.Op in
+        Name.of_json (List.assoc "name" dict) >>= fun name ->
+        Version.of_json (List.assoc "version" dict) >>= fun version ->
+        Some {name; version}
+      with Not_found -> None
+    end
+  | _ -> None
 
 module O = struct
   type tmp = t
@@ -156,6 +177,7 @@ module O = struct
   let equal = equal
   let to_string = to_string
   let to_json = to_json
+  let of_json = of_json
 end
 
 module Set = OpamStd.Set.Make (O)
@@ -255,13 +277,23 @@ let names_of_packages nvset =
     nvset
     Name.Set.empty
 
-let packages_of_name nvset n =
-  if n = "" then Set.empty else
+let package_of_name_aux empty split filter nv n =
+  if n = "" then empty else
   let inf = {name = String.sub n 0 (String.length n - 1); version= ""} in
   let sup = {name = n^"\000"; version = ""} in
-  let _, _, nvset = Set.split inf nvset in
-  let nvset, _, _ = Set.split sup nvset in
-  Set.filter (fun nv -> nv.name = n) nvset
+  let _, _, nv = split inf nv in
+  let nv, _, _ = split sup nv in
+  filter nv
+
+let packages_of_name nv n =
+  package_of_name_aux Set.empty Set.split
+    (Set.filter (fun nv -> nv.name = n))
+    nv n
+
+let packages_of_name_map nv n =
+  package_of_name_aux Map.empty Map.split
+    (Map.filter (fun nv _ -> nv.name = n))
+    nv n
 
 let package_of_name nvset n =
   Set.choose (packages_of_name nvset n)

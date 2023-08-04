@@ -4,7 +4,7 @@
 
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2015 OCamlPro                                             *)
+(*    Copyright 2015-2018 OCamlPro                                        *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
 (*  GNU Lesser General Public License version 2.1, with the special       *)
@@ -97,7 +97,7 @@ let () =
   OpamFormatConfig.init ();
   if not (OpamStateConfig.load_defaults root) then
     failwith "Opam root not found";
-  OpamStd.Config.init ();
+  OpamCoreConfig.init ();
   OpamSolverConfig.init ();
   OpamStateConfig.init ();
   let t =

@@ -1,0 +1,160 @@
+From: Mehdi Dogguy <mehdi@debian.org>
+Date: Sun, 28 Feb 2021 19:27:24 +0100
+Subject: Fix compilation with Dose3 7.0.0
+
+---
+ src/client/opamAdminCheck.ml       | 2 ++
+ src/client/opamAdminRepoUpgrade.ml | 2 ++
+ src/solver/opamBuiltinMccs.ml.real | 2 +-
+ src/solver/opamCudf.ml             | 9 ++++++---
+ src/solver/opamCudf.mli            | 4 ++--
+ src/solver/opamCudfSolver.ml       | 4 ++--
+ src/solver/opamSolver.ml           | 4 +++-
+ 7 files changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/src/client/opamAdminCheck.ml b/src/client/opamAdminCheck.ml
+index fa89224..a38f9d5 100644
+--- a/src/client/opamAdminCheck.ml
++++ b/src/client/opamAdminCheck.ml
+@@ -8,6 +8,8 @@
+ (*                                                                        *)
+ (**************************************************************************)
+ 
++module Algo = Dose_algo
++
+ open OpamTypes
+ open OpamPackage.Set.Op
+ 
+diff --git a/src/client/opamAdminRepoUpgrade.ml b/src/client/opamAdminRepoUpgrade.ml
+index 93c0ce6..5e97c01 100644
+--- a/src/client/opamAdminRepoUpgrade.ml
++++ b/src/client/opamAdminRepoUpgrade.ml
+@@ -8,6 +8,8 @@
+ (*                                                                        *)
+ (**************************************************************************)
+ 
++module Algo = Dose_algo
++
+ open OpamTypes
+ open OpamProcess.Job.Op
+ open OpamStd.Option.Op
+diff --git a/src/solver/opamBuiltinMccs.ml.real b/src/solver/opamBuiltinMccs.ml.real
+index 5ae58a3..b61cb17 100644
+--- a/src/solver/opamBuiltinMccs.ml.real
++++ b/src/solver/opamBuiltinMccs.ml.real
+@@ -42,7 +42,7 @@ let call solver_backend ext ~criteria ?timeout cudf =
+       ~verbose:OpamCoreConfig.(abs !r.debug_level >= 2)
+       ?timeout criteria cudf
+   with
+-  | None -> raise Common.CudfSolver.Unsat
++  | None -> raise Dose_common.CudfSolver.Unsat
+   | Some (preamble, univ) -> Some preamble, univ
+   | exception Mccs.Timeout -> raise (Timeout None)
+ 
+diff --git a/src/solver/opamCudf.ml b/src/solver/opamCudf.ml
+index f282653..c3aa41b 100644
+--- a/src/solver/opamCudf.ml
++++ b/src/solver/opamCudf.ml
+@@ -9,6 +9,9 @@
+ (*                                                                        *)
+ (**************************************************************************)
+ 
++module Common = Dose_common
++module Algo = Dose_algo
++
+ open OpamTypes
+ open OpamTypesBase
+ 
+@@ -1315,7 +1318,7 @@ let call_external_solver ~version_map univ req =
+     ignore (dump_cudf_request ~version_map cudf_request
+               criteria OpamSolverConfig.(!r.cudf_file));
+     (* Wrap a return of exn Timeout through Depsolver *)
+-    let check_request_using ~call_solver ~criteria ~explain req =
++    let check_request_using ~call_solver ~explain req =
+       let timed_out = ref false in
+       let call_solver args =
+         try call_solver args with
+@@ -1323,7 +1326,7 @@ let call_external_solver ~version_map univ req =
+         | OpamCudfSolver.Timeout None -> raise (Timeout None)
+       in
+       let r =
+-        Algo.Depsolver.check_request_using ~call_solver ~criteria ~explain req
++        Algo.Depsolver.check_request_using ~call_solver ~explain req
+       in
+       if !timed_out then raise (Timeout (Some r)) else r
+     in
+@@ -1335,7 +1338,7 @@ let call_external_solver ~version_map univ req =
+       let r =
+         check_request_using
+           ~call_solver:(OpamSolverConfig.call_solver ~criteria)
+-          ~criteria ~explain:true cudf_request
++          ~explain:true cudf_request
+       in
+       log "Solver call done in %.3fs" (chrono ());
+       r
+diff --git a/src/solver/opamCudf.mli b/src/solver/opamCudf.mli
+index fc15444..73d57ed 100644
+--- a/src/solver/opamCudf.mli
++++ b/src/solver/opamCudf.mli
+@@ -32,7 +32,7 @@ module Map: OpamStd.MAP with type key = Package.t
+ module Graph: sig
+   (** Graph of cudf packages *)
+ 
+-  include module type of Algo.Defaultgraphs.PackageGraph.G
++  include module type of Dose_algo.Defaultgraphs.PackageGraph.G
+ 
+   (** Build a graph from a CUDF universe. Warning: dependency edges are towards
+       the dependency, which is the reverse of what happens in the action
+@@ -198,7 +198,7 @@ val string_of_vpkgs: Cudf_types.vpkg list -> string
+ 
+ val make_conflicts:
+   version_map:int package_map -> Cudf.universe ->
+-  Algo.Diagnostic.diagnosis -> ('a, conflict) result
++  Dose_algo.Diagnostic.diagnosis -> ('a, conflict) result
+ val cycle_conflict:
+   version_map:int package_map -> Cudf.universe ->
+   string list list -> ('a, conflict) result
+diff --git a/src/solver/opamCudfSolver.ml b/src/solver/opamCudfSolver.ml
+index 6dda089..2ceebdf 100644
+--- a/src/solver/opamCudfSolver.ml
++++ b/src/solver/opamCudfSolver.ml
+@@ -57,7 +57,7 @@ let call_external_solver command ~criteria ?timeout (_, universe,_ as cudf) =
+     in
+     OpamFilename.remove solver_in;
+     if not (OpamFilename.exists solver_out) then
+-      raise (Common.CudfSolver.Error "no output")
++      raise (Dose_common.CudfSolver.Error "no output")
+     else if
+       (let ic = OpamFilename.open_in solver_out in
+        try
+@@ -65,7 +65,7 @@ let call_external_solver command ~criteria ?timeout (_, universe,_ as cudf) =
+          i = "FAIL"
+        with End_of_file -> close_in ic; false)
+     then
+-      raise Common.CudfSolver.Unsat
++      raise Dose_common.CudfSolver.Unsat
+     else
+     let r =
+       Cudf_parser.load_solution_from_file
+diff --git a/src/solver/opamSolver.ml b/src/solver/opamSolver.ml
+index 2fd53ea..e7f1137 100644
+--- a/src/solver/opamSolver.ml
++++ b/src/solver/opamSolver.ml
+@@ -9,6 +9,8 @@
+ (*                                                                        *)
+ (**************************************************************************)
+ 
++module Algo = Dose_algo
++
+ open OpamTypes
+ open OpamTypesBase
+ open OpamPackage.Set.Op
+@@ -90,7 +92,7 @@ let cudf_versions_map universe packages =
+     pmap OpamPackage.Map.empty
+ 
+ let name_to_cudf name =
+-  Common.CudfAdd.encode (OpamPackage.Name.to_string name)
++  Dose_common.CudfAdd.encode (OpamPackage.Name.to_string name)
+ 
+ let constraint_to_cudf version_map name (op,v) =
+   let nv = OpamPackage.create name v in

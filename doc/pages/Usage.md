@@ -45,6 +45,14 @@ you find a package there but not on your computer, either it has been recently
 added and you should simply run `opam update`, or it's not available on your
 system or OCaml version — `opam install PACKAGE` will give you the reason.
 
+## `--cli` option
+
+Since opam 2.1, opam is able to be invoked using a previous version of its
+command line. It's recommended that all opam commands in scripts use it, and
+also blog posts and other sources of information, so you may come across
+examples which include it. We don't recommend using it in the shell because it's
+more to type!
+
 ## Details on commands
 
 ### opam init
@@ -120,11 +128,12 @@ The syntax is
 opam pin add <package name> <target>
 ```
 
-Where `<target>` may be a version, but also a local path, the URL of an archive,
-or even a git, mercurial or darcs URL. The package will be kept up-to-date with
-its origin on `opam update` and when explicitly mentioned in a command, so that
-you can simply run `opam upgrade <package name>` to re-compile it from its
-upstream. If the upstream includes opam metadata, that will be used as well.
+Where `<target>` may be a version, but also an [URL](Manual.html#URLs) of a
+local path, an archive, or even a git, mercurial or darcs repository. The
+package will be kept up-to-date with its origin on `opam update` and when
+explicitly mentioned in a command, so that you can simply run `opam upgrade
+<package name>` to re-compile it from its upstream. If the upstream includes
+opam metadata, that will be used as well.
 
 ```
 opam pin add camlpdf 1.7                                      # version pin
@@ -133,7 +142,7 @@ opam pin add opam-lib https://github.com/ocaml/opam.git#1.2   # specific branch 
 opam pin add opam-lib --dev-repo                              # upstream repository
 ```
 
-This actually a powerful mechanism to divert any package definition, and can
+This is actually a powerful mechanism to divert any package definition, and can
 even be used to locally create packages that don't have entries in the
 repositories.
 

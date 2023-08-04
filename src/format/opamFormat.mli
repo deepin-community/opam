@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -11,6 +11,7 @@
 
 (** OPAM files syntax and conversion tools *)
 
+open OpamParserTypes.FullPos
 open OpamTypes
 open OpamPp
 
@@ -227,9 +228,10 @@ sig
     ('a * (string * bad_format) list, 'a) t
 
   (** Partitions items in an opamfile base on a condition on the variable
-      names *)
+      names. If a section is encountered, it is kept in the second list (as
+      filter returning false), unless [section] is true. *)
   val partition_fields :
-    (string -> bool) ->
+    ?section:bool -> (string -> bool) ->
     (opamfile_item list, opamfile_item list * opamfile_item list) t
 
   (** Partitions items in an opamfile base on a generic condition on the
@@ -260,7 +262,14 @@ sig
 
   (** Checks the [opam_version] field; otherwise the identity *)
   val check_opam_version :
-    ?optional:bool -> ?f:(opam_version -> bool) -> unit ->
+    ?optional:bool -> format_version:opam_version -> ?f:(opam_version -> bool)
+    -> unit ->
+    (opamfile_item list, opamfile_item list) t
+
+  (** Add [opam-version] field printing at printing, and removes it from parsed
+      fields if [undefined] (default is false) *)
+  val opam_version :
+    ?undefined:bool -> format_version:opam_version -> unit ->
     (opamfile_item list, opamfile_item list) t
 
   (** Signature handling (wip) *)

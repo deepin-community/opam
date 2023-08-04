@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -48,15 +48,20 @@ module VCS = struct
   (* Marks the current state, in the form of a reversing patch on top of the
      fetched state *)
 
-  let fetch ?cache_dir:_ repo_root repo_url =
+  let fetch ?cache_dir:_ ?subpath:_ repo_root repo_url =
     (* Just do a fresh pull into a temp directory, and replace _darcs/
        There is no easy way to diff or make sure darcs forgets about local
        patches otherwise. *)
+    let repo_str =
+      match OpamUrl.local_dir repo_url with
+      | Some path -> OpamFilename.Dir.to_string path
+      | None -> OpamUrl.base_url repo_url
+    in
     OpamFilename.with_tmp_dir_job @@ fun d ->
     let repodir = d / "repo" in
     darcs repo_root
       (with_tag repo_url
-         [ "get"; OpamUrl.base_url repo_url;
+         [ "get"; repo_str;
            "--repodir"; OpamFilename.Dir.to_string repodir;
            "--quiet"; "--lazy" ])
       (* --no-working-dir would be fine, except it is stored in _darcs/format *)
@@ -152,9 +157,47 @@ module VCS = struct
 
   let current_branch _dir = Done None (* No branches in Darcs *)
 
-  let is_dirty dir =
+  let is_dirty ?subpath:_ dir =
     darcs dir [ "whatsnew"; "--quiet"; "--summary" ]
     @@> fun r -> Done (OpamProcess.check_success_and_cleanup r)
+
+  let modified_files repo_root =
+    darcs repo_root [ "whatsnew"; "--summary" ] @@> fun r ->
+    OpamSystem.raise_on_process_error r;
+    let files =
+      OpamStd.List.filter_map (fun line ->
+          match OpamStd.String.split line ' ' with
+          | ("A" | "M")::file::[]
+          | _::"->"::file::[] -> Some file
+          | _ -> None) r.OpamProcess.r_stdout
+    in
+    Done (List.sort_uniq compare files)
+
+  let get_remote_url ?hash:_ repo_root =
+    darcs repo_root [ "show"; "repo" ]
+    @@> function
+    | { OpamProcess.r_code = 0; _ } as r ->
+      let res =
+        (let valid c e =
+           match OpamStd.String.cut_at (OpamStd.String.strip e) ':' with
+           | Some (p,rhs) when p = c -> Some rhs
+           | _ -> None
+         in
+         match OpamStd.List.filter_map (valid "Cache") r.r_stdout with
+         | [line] ->
+           (let repo =
+              OpamStd.List.filter_map (valid "repo")
+              (OpamStd.String.split line ',')
+            in
+            match repo with
+            | [repo] -> Some repo
+            | _ -> None)
+         | _ -> None)
+      in
+      Done (OpamStd.Option.map (fun u ->
+          OpamUrl.parse ~backend:`darcs u) res)
+    | { OpamProcess.r_code = 1; _ } -> Done None
+    | r -> OpamSystem.process_error r
 
 end
 

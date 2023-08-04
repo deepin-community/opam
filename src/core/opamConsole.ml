@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -13,7 +13,7 @@ open OpamCompat
 
 (* Global configuration *)
 
-let debug () = OpamCoreConfig.(!r.debug_level) > 0
+let debug () = abs OpamCoreConfig.(!r.debug_level) > 0
 
 let verbose () = OpamCoreConfig.(!r.verbose_level) > 0
 
@@ -97,6 +97,9 @@ module Symbols = struct
   let upwards_arrow = Uchar.of_int 0x2191
   let downwards_arrow = Uchar.of_int 0x2193
   let up_down_arrow = Uchar.of_int 0x2195
+  let downwards_double_arrow = Uchar.of_int 0x21d3
+  let black_down_pointing_triangle = Uchar.of_int 0x25bc
+  let downwards_black_arrow = Uchar.of_int 0x2b07
 end
 
 type win32_glyph_checker = {
@@ -171,7 +174,7 @@ let utf8_symbol main ?(alternates=[]) s =
     s
 
 let timer () =
-  if debug () then
+  if OpamCoreConfig.(!r.debug_level) > 0 then
     let t = Unix.gettimeofday () in
     fun () -> Unix.gettimeofday () -. t
   else
@@ -227,40 +230,51 @@ let acolor_with_width width c () s =
     else String.make (w-String.length str) ' '
 
 let acolor c () = colorise c
-let acolor_w width c oc s =
-  output_string oc (acolor_with_width (Some width) c () s)
+let acolor_w width c f s =
+  Format.pp_print_string f (acolor_with_width (Some width) c () s)
 
-type win32_color_mode = Shim | VT100
+type win32_color_mode = Shim | VT100 of (unit -> unit)
 
 type _ shim_return =
- | Handle : (OpamStubs.handle * win32_color_mode) shim_return
+ | Handle : (OpamStubs.stdhandle * win32_color_mode) shim_return
  | Mode   : win32_color_mode shim_return
- | Peek   : (win32_color_mode -> bool) shim_return
+ | Peek   : bool shim_return
+
+let force_win32_vt100 handle () =
+  try
+    let hConsoleOutput = OpamStubs.getStdHandle handle in
+    let mode = OpamStubs.getConsoleMode hConsoleOutput in
+    (* ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x4 *)
+    let vt100_on = 0x4 in
+    if mode land vt100_on = 0 then
+      OpamStubs.setConsoleMode hConsoleOutput (mode lor vt100_on) |> ignore
+  with Not_found -> ()
 
 let enable_win32_vt100 ch =
-  let hConsoleOutput =
-    OpamStubs.getStdHandle ch
-  in
   try
+    let hConsoleOutput = OpamStubs.getStdHandle ch in
     let mode = OpamStubs.getConsoleMode hConsoleOutput in
     (* ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x4 *)
     let vt100_on = 0x4 in
     if mode land vt100_on <> 0 then
-      (hConsoleOutput, VT100)
+      (ch, VT100(force_win32_vt100 ch))
     else
       if OpamStubs.setConsoleMode hConsoleOutput (mode lor vt100_on) then begin
         let restore_console () =
-          let mode =
-            OpamStubs.getConsoleMode hConsoleOutput land (lnot vt100_on)
-          in
-          OpamStubs.setConsoleMode hConsoleOutput mode |> ignore
+          try
+            let hConsoleOutput = OpamStubs.getStdHandle ch in
+            let mode =
+              OpamStubs.getConsoleMode hConsoleOutput land (lnot vt100_on)
+            in
+            OpamStubs.setConsoleMode hConsoleOutput mode |> ignore
+          with Not_found -> ()
         in
         at_exit restore_console;
-        (hConsoleOutput, VT100)
+        (ch, VT100(force_win32_vt100 ch))
       end else
-        (hConsoleOutput, Shim)
+        (ch, Shim)
   with Not_found ->
-    (hConsoleOutput, VT100)
+    (ch, VT100 ignore)
 
 let stdout_state = lazy (enable_win32_vt100 OpamStubs.STD_OUTPUT_HANDLE)
 let stderr_state = lazy (enable_win32_vt100 OpamStubs.STD_ERROR_HANDLE)
@@ -274,11 +288,12 @@ let get_win32_console_shim :
     | Mode ->
         Lazy.force ch |> snd
     | Peek ->
-        fun mode ->
-          if Lazy.is_val ch then
-            snd (Lazy.force ch) = mode
-          else
-            false
+        if Lazy.is_val ch then
+          match Lazy.force ch with
+          | (_, Shim) -> false
+          | (_, VT100 force) -> force (); true
+        else
+          false
 
 (*
  * Layout of attributes (wincon.h)
@@ -310,14 +325,17 @@ let win32_print_message ch msg =
     | `stdout -> stdout
     | `stderr -> stderr
   in
-  if get_win32_console_shim ch Peek VT100 then
+  if get_win32_console_shim ch Peek then
     Printf.fprintf ocaml_ch "%s%!" msg
   else
-    let (hConsoleOutput, mode) = get_win32_console_shim ch Handle in
-    if mode = VT100 then begin
+    let (ch, mode) = get_win32_console_shim ch Handle in
+    match mode with
+    | VT100 force ->
+      force ();
       output_string ocaml_ch msg;
       flush ocaml_ch
-    end else
+    | Shim ->
+      let hConsoleOutput = OpamStubs.getStdHandle ch in
       let {OpamStubs.attributes; _} =
         OpamStubs.getConsoleScreenBufferInfo hConsoleOutput
       in
@@ -415,15 +433,16 @@ let carriage_delete_unix _ =
   print_string "\r\027[K"
 
 let carriage_delete_windows () =
-  let (hConsoleOutput, mode) = get_win32_console_shim `stdout Handle in
-  match mode with
-  | Shim ->
+  match get_win32_console_shim `stdout Handle with
+  | (ch, Shim) ->
+      let hConsoleOutput = OpamStubs.getStdHandle ch in
       let {OpamStubs.size = (w, _); cursorPosition = (_, row); _} =
         OpamStubs.getConsoleScreenBufferInfo hConsoleOutput in
       Printf.printf "\r%!";
       OpamStubs.fillConsoleOutputCharacter hConsoleOutput '\000' w (0, row)
         |> ignore
-  | VT100 ->
+  | (_, VT100 force) ->
+      force ();
       carriage_delete_unix ()
 
 let carriage_delete =
@@ -432,8 +451,10 @@ let carriage_delete =
       match get_win32_console_shim `stdout Mode with
       | Shim ->
           carriage_delete_windows
-      | VT100 ->
-          carriage_delete_unix)
+      | VT100 force ->
+          fun () ->
+            force ();
+            carriage_delete_unix ())
     in
     fun () -> Lazy.force carriage_delete ()
   else
@@ -455,8 +476,10 @@ let clear_status =
           fun () ->
             carriage_delete_windows ();
             displaying_status := false
-      | VT100 ->
-          clear_status_unix)
+      | VT100 force ->
+          fun () ->
+            force ();
+            clear_status_unix ())
     in
     fun () ->
       Lazy.force clear_status ()
@@ -492,27 +515,62 @@ let timestamp () =
     tm.Unix.tm_sec
     (int_of_float (1000.0 *. msec))
 
-let log section ?(level=1) fmt =
-  if level <= OpamCoreConfig.(!r.debug_level) then
-    let () = clear_status () in
-    if Sys.win32 then begin
-      (*
-       * In order not to break [slog], split the output into two. A side-effect
-       * of this is that logging lines may not use colour.
-       *)
-      win32_print_message `stderr (Printf.sprintf "%s  %a  "
-        (timestamp ()) (acolor_with_width (Some 30) `yellow) section);
-      Printf.fprintf stderr (fmt ^^ "\n%!") end
-    else
-      Printf.fprintf stderr ("%s  %a  " ^^ fmt ^^ "\n%!")
-        (timestamp ()) (acolor_w 30 `yellow) section
+let log_formatter, finalise_output =
+  if Sys.win32 then
+    let b = Buffer.create 128 in
+    let f _ =
+      win32_print_message `stderr (Buffer.contents b);
+      Buffer.clear b
+    in
+      Format.formatter_of_buffer b, f
   else
-    Printf.ifprintf stderr fmt
+    Format.formatter_of_out_channel stderr, ignore
+
+let () =
+  Format.pp_set_margin log_formatter 0
+
+let pending = Queue.create ()
+
+let clear_pending debug_level =
+  let f (level, timestamp, msg) =
+    if level <= abs debug_level then
+      let timestamp = if debug_level < 0 then "" else timestamp in
+      Format.kfprintf finalise_output log_formatter "%s%s%!" timestamp msg
+  in
+  Queue.iter f pending;
+  Queue.clear pending
+
+let log section ?(level=1) fmt =
+  let debug_level =
+    let debug_level = OpamCoreConfig.(!r.debug_level) in
+    let sections = OpamCoreConfig.(!r.debug_sections) in
+    if OpamStd.String.Map.is_empty sections then
+      debug_level
+    else
+      match OpamStd.String.Map.find section sections with
+      | Some level -> level
+      | None -> debug_level
+      | exception Not_found -> 0
+  in
+  if not OpamCoreConfig.(!r.set) then
+    let b = Buffer.create 128 in
+    let timestamp = timestamp () ^ "  " in
+    let k _ = Queue.push (level, timestamp, Buffer.contents b) pending in
+    Format.kfprintf k (Format.formatter_of_buffer b) ("%a  " ^^ fmt ^^ "\n%!")
+      (acolor_w 30 `yellow) section
+  else if level <= abs debug_level then
+    let () = clear_status () in
+    let () = clear_pending debug_level in
+    let timestamp = if debug_level < 0 then "" else timestamp () ^ "  " in
+    Format.kfprintf finalise_output log_formatter ("%s%a  " ^^ fmt ^^ "\n%!")
+      timestamp (acolor_w 30 `yellow) section
+  else
+    Format.ifprintf Format.err_formatter fmt
 
 (* Helper to pass stringifiers to log (use [log "%a" (slog to_string) x]
    rather than [log "%s" (to_string x)] to avoid costly unneeded
    stringifications *)
-let slog to_string channel x = output_string channel (to_string x)
+let slog to_string f x = Format.pp_print_string f (to_string x)
 
 let error fmt =
   Printf.ksprintf (fun str ->
@@ -549,7 +607,7 @@ let formatted_msg ?indent fmt =
 
 let last_status = ref ""
 
-let write_status_unix fmt =
+let write_status_unix print_string fmt =
   let print_string s =
     print_string s;
     flush stdout;
@@ -569,18 +627,18 @@ let write_status_windows fmt =
 let win32_print_functions = lazy (
   match get_win32_console_shim `stdout Mode with
   | Shim ->
-      (true, (fun s -> win32_print_message `stdout (s ^ "\n")))
-  | VT100 ->
-      (false, print_endline))
+      (true, (fun s -> win32_print_message `stdout (s ^ "\n")), print_string)
+  | VT100 force ->
+      (false, (fun s -> force (); print_endline s), (fun s -> force (); print_string s)))
 
 let status_line fmt =
   let batch =
     debug () || not (disp_status_line ()) in
-  let (use_shim, print_msg) =
+  let (use_shim, print_msg, print_string) =
     if Sys.win32 then
       Lazy.force win32_print_functions
     else
-      (false, print_endline)
+      (false, print_endline, print_string)
   in
   if batch then
     Printf.ksprintf
@@ -590,7 +648,7 @@ let status_line fmt =
     if use_shim then
       write_status_windows fmt
     else
-      write_status_unix fmt
+      write_status_unix print_string fmt
 
 let header_width () = min 80 (OpamStd.Sys.terminal_columns ())
 
@@ -642,16 +700,17 @@ let header_error fmt =
     ) fmt
 
 
-let confirm ?(default=true) fmt =
+let confirm ?(require_unsafe_yes=false) ?(default=true) fmt =
   Printf.ksprintf (fun s ->
       try
         if OpamCoreConfig.(!r.safe_mode) then false else
         let prompt () =
           formatted_msg "%s [%s] " s (if default then "Y/n" else "y/N")
         in
-        if OpamCoreConfig.(!r.answer) = Some true then
+        if (require_unsafe_yes && OpamCoreConfig.answer_is `unsafe_yes)
+        || (not require_unsafe_yes && OpamCoreConfig.answer_is_yes ()) then
           (prompt (); msg "y\n"; true)
-        else if OpamCoreConfig.(!r.answer) = Some false ||
+        else if OpamCoreConfig.answer_is `all_no ||
                 OpamStd.Sys.(not tty_in)
         then
           (prompt (); msg "n\n"; false)
@@ -705,7 +764,7 @@ let confirm ?(default=true) fmt =
 let read fmt =
   Printf.ksprintf (fun s ->
       formatted_msg "%s " s;
-      if OpamCoreConfig.(!r.answer = None && not !r.safe_mode) then (
+      if OpamCoreConfig.(answer_is `ask && not !r.safe_mode) then (
         try match read_line () with
           | "" -> None
           | s  -> Some s

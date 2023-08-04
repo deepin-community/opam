@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2020 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -32,6 +32,7 @@ let empty_universe =
     u_installed_roots = OpamPackage.Set.empty;
     u_pinned = OpamPackage.Set.empty;
     u_base = OpamPackage.Set.empty;
+    u_invariant = OpamFormula.Empty;
     u_reinstall = OpamPackage.Set.empty;
     u_attrs = [];
   }
@@ -54,6 +55,11 @@ let is_available universe wish_remove (name, _ as c) =
     ) universe.u_available
   &&
   List.for_all (fun (n, _) -> n <> name) wish_remove
+
+let solution_to_json solution =
+  OpamCudf.ActionGraph.to_json solution
+let solution_of_json json =
+  OpamCudf.ActionGraph.of_json json
 
 let cudf_versions_map universe packages =
   log ~level:3 "cudf_versions_map";
@@ -96,6 +102,8 @@ let constraint_to_cudf version_map name (op,v) =
        (this shouldn't happen for any constraint in the universe, now that we
        compute a full version map, but may still happen for user-provided
        constraints) *)
+    log "Warn: fallback constraint for %s"
+      (OpamFormula.string_of_atom (name, Some (op,v)));
     let all_versions =
       OpamPackage.Map.filter (fun nv _ -> nv.name = name)
         version_map in
@@ -125,12 +133,32 @@ let atom2cudf _universe (version_map : int OpamPackage.Map.t) (name,cstr) =
   name_to_cudf name,
   OpamStd.Option.Op.(cstr >>= constraint_to_cudf version_map name)
 
+let opam_invariant_package version_map invariant =
+  let depends =
+    OpamFormula.to_atom_formula invariant
+    |> OpamFormula.map (fun at -> Atom (atom2cudf () version_map at))
+    |> OpamFormula.cnf_of_formula
+    |> OpamFormula.ands_to_list
+    |> List.map (OpamFormula.fold_right (fun acc x -> x::acc) [])
+  in {
+    Cudf.
+    package = OpamCudf.opam_invariant_package_name;
+    version = snd OpamCudf.opam_invariant_package;
+    depends;
+    conflicts = [];
+    provides = [];
+    installed = true;
+    was_installed = true;
+    keep = `Keep_version;
+    pkg_extra = [
+      OpamCudf.s_source, `String "SWITCH_INVARIANT";
+      OpamCudf.s_source_number, `String "NULL";
+    ];
+  }
+
 let lag_function =
-  let exp =
-    OpamStd.Option.default 1 (OpamStd.Config.env_int "VERSIONLAGPOWER")
-  in
   let rec power n x = if n <= 0 then 1 else x * power (n-1) x in
-  power exp
+  power OpamSolverConfig.(!r.version_lag_power)
 
 let opam2cudf universe version_map packages =
   let set_to_bool_map set =
@@ -155,24 +183,31 @@ let opam2cudf universe version_map packages =
       base_map m
   in
   let installed_map = set_to_bool_map universe.u_installed in
-  let keep_map =
-    OpamPackage.Set.fold (fun nv acc ->
-        if OpamPackage.Set.mem nv universe.u_available
-        then OpamPackage.Map.add nv `Keep_version acc
-        else if OpamPackage.has_name universe.u_available nv.name
-        then OpamPackage.Map.add nv `Keep_package acc
-        else acc)
-      (packages %% universe.u_base) OpamPackage.Map.empty
-  in
   let reinstall_map = set_to_bool_map universe.u_reinstall in
   let installed_root_map = set_to_bool_map universe.u_installed_roots in
   let pinned_to_current_version_map = set_to_bool_map universe.u_pinned in
+  let avoid_versions =
+    OpamStd.Option.default OpamPackage.Set.empty @@
+    OpamStd.List.assoc_opt "avoid-version" universe.u_attrs
+  in
   let version_lag_map =
     OpamPackage.Name.Map.fold (fun name version_set acc ->
         let nvers, vs =
           OpamPackage.Version.Set.fold (fun v (i,acc) ->
-              i+1, OpamPackage.Version.Map.add v i acc)
+              if OpamPackage.Set.mem (OpamPackage.create name v) avoid_versions
+              then i, acc
+              else i+1, OpamPackage.Version.Map.add v i acc)
             version_set (0, OpamPackage.Version.Map.empty)
+        in
+        let nvers, vs =
+          (* Place all avoid-versions after normal versions *)
+          (* Not strictly necessary, but gives a better fallback in case the
+             specific criteria for avoided versions are not set *)
+          OpamPackage.Version.Set.fold (fun v (i,acc) ->
+              if OpamPackage.Set.mem (OpamPackage.create name v) avoid_versions
+              then i+1, OpamPackage.Version.Map.add v i acc
+              else i, acc)
+            version_set (nvers, vs)
         in
         OpamPackage.Version.Map.fold (fun v i ->
             let lag = lag_function (nvers - i - 1) in
@@ -202,7 +237,6 @@ let opam2cudf universe version_map packages =
     base_map
     |> add version_map (fun _ version cp -> {cp with Cudf.version})
     |> add installed_map (fun _ installed cp -> {cp with Cudf.installed})
-    |> add keep_map (fun _ keep cp -> {cp with Cudf.keep})
     |> add reinstall_map (fun _ x cp ->
         {cp with Cudf.pkg_extra =
                    (OpamCudf.s_reinstall, `Bool x) :: cp.Cudf.pkg_extra})
@@ -279,25 +313,12 @@ let opam2cudf universe version_map packages =
 
 (* load a cudf universe from an opam one *)
 let load_cudf_universe
-    opam_universe ?version_map opam_packages =
+    opam_universe ?version_map ?(add_invariant=false) opam_packages =
   let chrono = OpamConsole.timer () in
   let version_map = match version_map with
     | Some vm -> vm
     | None -> cudf_versions_map opam_universe opam_packages in
   log ~level:3 "Load cudf universe: opam2cudf";
-  let opam_packages =
-    if OpamPackage.Set.subset opam_universe.u_base opam_universe.u_available
-    then
-      (* Filter out extra compiler versions, they add too much cost to the
-         solver and are not needed *)
-      opam_packages --
-      (OpamPackage.packages_of_names opam_packages
-         OpamPackage.Name.Set.Op.(
-           OpamPackage.names_of_packages opam_universe.u_base
-           -- OpamPackage.names_of_packages opam_universe.u_pinned)
-       -- opam_universe.u_base)
-    else opam_packages
-  in
   let univ_gen =
     opam2cudf opam_universe version_map opam_packages
   in
@@ -309,8 +330,12 @@ let load_cudf_universe
     post;
   let chrono = OpamConsole.timer () in
   let cudf_universe =
+    let cudf_packages = univ_gen ~depopts ~build ~post in
     let cudf_packages =
-      univ_gen ~depopts ~build ~post
+      if add_invariant then
+        opam_invariant_package version_map opam_universe.u_invariant
+        :: cudf_packages
+      else cudf_packages
     in
     log ~level:3 "opam2cudf: done in %.3fs" (chrono ());
     try Cudf.load_universe cudf_packages
@@ -419,7 +444,13 @@ let resolve universe ~orphans request =
   let cudf_request = map_request (atom2cudf universe version_map) request in
   let resolve u req =
     try
+      let invariant_pkg =
+        opam_invariant_package version_map universe.u_invariant
+      in
+      Cudf.add_package u invariant_pkg;
       let resp = OpamCudf.resolve ~extern:true ~version_map u req in
+      Cudf.remove_package u
+        (invariant_pkg.Cudf.package, invariant_pkg.Cudf.version);
       OpamCudf.to_actions add_orphan_packages u resp
     with OpamCudf.Solver_failure msg ->
       OpamConsole.error_and_exit `Solver_failure "%s" msg
@@ -443,7 +474,8 @@ let get_atomic_action_graph t =
 let installable universe =
   log "trim";
   let simple_universe =
-    load_cudf_universe universe universe.u_available ~build:true ~post:true ()
+    load_cudf_universe universe ~add_invariant:true
+      universe.u_available ~build:true ~post:true ()
   in
   let trimmed_universe =
     (* Algo.Depsolver.trim simple_universe => this can explode memory, we need
@@ -461,7 +493,9 @@ let installable universe =
     Cudf.load_universe !trimmed_pkgs
   in
   Cudf.fold_packages
-    (fun universe pkg -> OpamPackage.Set.add (OpamCudf.cudf2opam pkg) universe)
+    (fun universe pkg ->
+       if pkg.package = OpamCudf.opam_invariant_package_name then universe
+       else OpamPackage.Set.add (OpamCudf.cudf2opam pkg) universe)
     OpamPackage.Set.empty
     trimmed_universe
 
@@ -469,12 +503,15 @@ let installable_subset universe packages =
   log "trim-subset";
   let version_map = cudf_versions_map universe universe.u_available in
   let simple_universe =
-    load_cudf_universe ~build:true ~post:true universe ~version_map
+    load_cudf_universe ~build:true ~post:true universe
+      ~version_map ~add_invariant:true
       universe.u_available ()
   in
   let cudf_packages =
     Cudf.get_packages
-      ~filter:(fun p -> OpamPackage.Set.mem (OpamCudf.cudf2opam p) packages)
+      ~filter:(fun p ->
+          p.package <> OpamCudf.opam_invariant_package_name &&
+          OpamPackage.Set.mem (OpamCudf.cudf2opam p) packages)
       simple_universe
   in
   let trimmed_universe =
@@ -491,15 +528,46 @@ let installable_subset universe packages =
     ignore (listcheck ~callback ~explain:false simple_universe cudf_packages);
     Cudf.load_universe !trimmed_pkgs
   in
+  Cudf.remove_package trimmed_universe OpamCudf.opam_invariant_package;
   Cudf.fold_packages
     (fun universe pkg -> OpamPackage.Set.add (OpamCudf.cudf2opam pkg) universe)
     OpamPackage.Set.empty
     trimmed_universe
 
+let coinstallable_subset universe set packages =
+  let u_invariant =
+    OpamPackage.Set.fold (fun p acc ->
+        OpamFormula.ands [acc; Atom (p.name, Atom (`Eq, p.version))])
+      set OpamFormula.Empty
+  in
+  installable_subset {universe with u_invariant} packages
+
+module PkgGraph = Graph.Imperative.Digraph.ConcreteBidirectional(OpamPackage)
+
+let dependency_graph
+    ~depopts ~build ~post ~installed ?(unavailable=false)
+    universe =
+  let u_packages =
+    if installed then universe.u_installed else
+    if unavailable then universe.u_packages else
+      universe.u_available in
+  let cudf_graph =
+    load_cudf_universe ~depopts ~build ~post universe u_packages () |>
+    OpamCudf.Graph.of_universe
+  in
+  let g = PkgGraph.create ~size:(OpamCudf.Graph.nb_vertex cudf_graph) () in
+  OpamCudf.Graph.iter_vertex (fun v ->
+      PkgGraph.add_vertex g (OpamCudf.cudf2opam v))
+    cudf_graph;
+  OpamCudf.Graph.iter_edges (fun v1 v2 ->
+      PkgGraph.add_edge g (OpamCudf.cudf2opam v1) (OpamCudf.cudf2opam v2))
+    cudf_graph;
+  g
+
 let filter_dependencies
     f_direction ~depopts ~build ~post ~installed
     ?(unavailable=false) universe packages =
-  if OpamPackage.Set.is_empty packages then [] else
+  if OpamPackage.Set.is_empty packages then OpamPackage.Set.empty else
   let u_packages =
     packages ++
     if installed then universe.u_installed else
@@ -512,23 +580,39 @@ let filter_dependencies
     load_cudf_universe ~depopts ~build ~post universe ~version_map
       u_packages () in
   let cudf_packages =
-    opam2cudf universe ~depopts ~build ~post version_map packages
+    OpamCudf.Set.of_list
+      (opam2cudf universe ~depopts ~build ~post version_map packages)
   in
   log ~level:3 "filter_dependencies: dependency";
-  let topo_packages = f_direction cudf_universe cudf_packages in
-  let result = List.rev_map OpamCudf.cudf2opam topo_packages in
+  let clos_packages = f_direction cudf_universe cudf_packages in
+  let result =
+    OpamCudf.Set.fold (fun cp -> OpamPackage.Set.add (OpamCudf.cudf2opam cp))
+      clos_packages OpamPackage.Set.empty
+  in
   log "filter_dependencies result=%a"
-    (slog (OpamStd.List.to_string OpamPackage.to_string)) result;
+    (slog OpamPackage.Set.to_string) result;
   result
 
 let dependencies = filter_dependencies OpamCudf.dependencies
 
 let reverse_dependencies = filter_dependencies OpamCudf.reverse_dependencies
 
+let dependency_sort ~depopts ~build ~post universe packages =
+  let version_map = cudf_versions_map universe universe.u_packages in
+  let cudf_universe =
+    load_cudf_universe ~depopts ~build ~post universe ~version_map
+      universe.u_packages () in
+  let cudf_packages =
+    OpamCudf.Set.of_list
+      (opam2cudf universe ~depopts ~build ~post version_map packages)
+  in
+  List.map OpamCudf.cudf2opam
+    (OpamCudf.dependency_sort cudf_universe cudf_packages)
+
 let coinstallability_check universe packages =
   let version_map = cudf_versions_map universe universe.u_packages in
   let cudf_universe =
-    load_cudf_universe ~build:true ~post:true ~version_map
+    load_cudf_universe ~build:true ~post:true ~version_map ~add_invariant:true
       universe universe.u_packages ()
   in
   let cudf_packages =
@@ -547,36 +631,28 @@ let check_for_conflicts universe =
   coinstallability_check universe universe.u_installed
 
 let atom_coinstallability_check universe atoms =
-  let packages = OpamFormula.packages_of_atoms universe.u_available atoms in
-  let map = OpamPackage.to_map packages in
-  List.for_all (fun (n, _) -> OpamPackage.Name.Map.mem n map) atoms &&
   let version_map = cudf_versions_map universe universe.u_packages in
+  let check_pkg = {
+    Cudf.default_package with
+    package = "=check_coinstallability";
+    depends = List.map (fun at -> [atom2cudf () version_map at]) atoms;
+  } in
   let cudf_universe =
-    load_cudf_universe ~build:true ~post:true ~version_map
-      universe universe.u_packages ()
+    Cudf.load_universe
+      (check_pkg ::
+       opam_invariant_package version_map universe.u_invariant ::
+       opam2cudf universe version_map universe.u_available
+         ~depopts:false ~build:true ~post:true)
   in
-  let cudf_ll =
-    OpamPackage.Name.Map.fold (fun n versions acc ->
-        let packages =
-          OpamPackage.Version.Set.fold
-            (fun v -> OpamPackage.(Set.add (create n v)))
-            versions OpamPackage.Set.empty
-        in
-        opam2cudf
-          universe ~depopts:false ~build:true ~post:true version_map
-          packages
-        :: acc)
-      map []
-  in
-  let result = Algo.Depsolver.edos_coinstall_prod cudf_universe cudf_ll in
-  List.exists Algo.Diagnostic.is_solution result
+  Algo.Depsolver.edos_install cudf_universe check_pkg
+  |> Algo.Diagnostic.is_solution
 
 let new_packages sol =
   OpamCudf.ActionGraph.fold_vertex (fun action packages ->
       match action with
       | `Install p | `Change (_,_,p) ->
         OpamPackage.Set.add (OpamCudf.cudf2opam p) packages
-      | `Reinstall _ | `Remove _ | `Build _ -> packages
+      | `Reinstall _ | `Remove _ | `Build _ | `Fetch _ -> packages
   ) sol OpamPackage.Set.empty
 
 let all_packages sol =
@@ -594,7 +670,7 @@ let stats sol =
       | `Change (`Down,_,_) -> {stats with s_downgrade = stats.s_downgrade+1}
       | `Reinstall _ -> {stats with s_reinstall = stats.s_reinstall+1}
       | `Remove _ -> {stats with s_remove = stats.s_remove+1}
-      | `Build _ -> stats)
+      | `Build _ | `Fetch _ -> stats)
     (OpamCudf.ActionGraph.reduce sol)
     { s_install=0; s_reinstall=0; s_upgrade=0; s_downgrade=0; s_remove=0 }
 
@@ -660,7 +736,7 @@ let print_solution ~messages ~append ~requested ~reinstall t =
           match a with
           | `Install p | `Change (_,_,p) | `Reinstall p ->
             messages (OpamCudf.cudf2opam p)
-          | `Remove _ | `Build _ -> []
+          | `Remove _ | `Build _ | `Fetch _ -> []
         in
         action :: actions, (cause, messages) :: details
       ) t ([],[])

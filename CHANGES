@@ -1,131 +1,760 @@
 Changes prefixed with "(*)" are potentially breaking to scripts or existing
 repositories (changes that are automatically handled by the format upgrade tools
-are not marked).
+are not marked). Those prefixed with "(+)" are new command/option (since
+2.1.0~alpha2).
 
-2.0.8:
-* Add colon for fish MANPATH fix. [#4084 @rjbou - fix #4078]
-* No error when linked directory doesn't exist (e.g. XDG defined)
-  [#4278 @kit-ty-kate]
-* Add quotes to avoid space unwanted behaviors [#4278 @kit-ty-kate]
-* Handle `CCACHE_DIR` environment variable in sandbox script.
-  [#4087 @rjbou - fix #4079]
-* Follow links of `~/.cache` & `~/.cache/dune` for bwrap call.
-  [#4087 @rjbou - fix #4086]
-* Don't overwrite user's sandbow script modification. [#4020 #4092 @rjbou]
-* On MacOS sandbox script, always read write mount `/tmp`
-  [#3742 @rjbou - fix ocaml/opam-repository#13339]
-* Use version var in opam file instead of equal current version number in
-  opamlib dependencies [#4178 @rjbou]
-* Opam file build using dune [#4178 @rjbou #4229 @kit-ty-kate - fix #4173]
-* Update opam file to 2.0 [#4371 @AltGr]
+2.1.2:
+* Fallback on dnf if yum does not exist on RHEL-based systems [#4825 @kit-ty-kate]
+* Use --no-depexts in CLI 2.0 mode [#4908 @dra27]
+* bootstrap: update ocaml version (fixes the compilation of opam with mingw) [#4927 @kit-ty-kate]
+
+2.1.1:
+* Fix typo in error message for opam var [#4786 @kit-ty-kate - fix #4785]
+* Run the sandbox check in the temporary directory [#4787 @dra27 - fix #4783]
+* OpamSystem: avoid calling Unix.environment at top level [#4789 @hannesm]
+* Homebrew: Add support for casks and full-names [#4801 @kit-ty-kate]
+* Fix the cold target in presence of an older OCaml compiler version on macOS
+  [#4802 @kit-ty-kate - fix #4801]
+* Archlinux: handle virtual package detection [#4833 @rjbou - partial fix #4759]
+* Disable the detection of available packages on RHEL-based distributions.
+  This fixes an issue on RHEL-based distributions where yum list used to detect
+  available and installed packages would wait for user input without showing
+  any output and/or fail in some cases [#4791 @kit-ty-kate - fixes #4790]
+* Handle empty environment variable updates - missed cherry-pick from 2.0
+  [#4840 @dra27]
+* Fix vendored build on mingw-w64 with g++ 11.2 [#4835 @dra27]
+* Put back support for switch creation with packages argument and
+  `--packages` option with cli 2.0, and a specific error message for cli 2.1
+  [#4853 @rjbou - fix #4843]
+* Fix reverting environment additions to PATH-like variables when several dirs
+  added at once [#4861 @dra27]
+* Fix dose3 download url since gforge is gone [#4870 @avsm]
+* Ensure setenv can use package variables defined during the build
+  [#4841 @dra27]
+* Fix `set-invariant: default repos were loaded instead of switch repos
+  [#4866 @rjbou]
+
+2.1.0:
+* Set DEBIAN_FRONTEND=noninteractive for unsafe-yes confirmation level
+  [#4735 @dra27 - partially fix #4731]
+* Fix 2.1~alpha2 to 2.1 format upgrade with reinit [#4750 #4756 @rjbou - fix #4748]
+* Fix bypass-check handling on reinit [#4750 @rjbou]
+* fish: fix deprecated redirection syntax `^` [#4736 @vzaliva]
+* Bump src_exts and fix build compat with Dune 2.9.0 [#4754 @dra27]
+* Fix depext alpine tagged repositories handling [#4758 @rjbou]
+
+2.1.0~rc2:
+* Remove OPAMZ3DEBUG evironment variable [#4720 @rjbou - fix #4717]
+* Fix format upgrade when there is missing local switches in the config file
+  [#4715 @rjbou - fix #4713]
+* Fix not recorded local switch handling, with format upgrade [#4715 @rjbou]
+* Set opam root version to 2.1 [#4715 @rjbou]
+* Improved and extended tests [#4715 @rjbou]
+
+2.1.0~rc:
+* (*) Environment variables initialised only at opam client launch, no more via
+  libraries [#4606 #4703 @rjbou]
+* (*) Deprecated `build-doc`, `build-test`, `make` flags [#4581 @rjbou]
+* (+) Add `--confirm-level` and `OPAMCONFIRMLEVEL` for automatic answering
+  [#4582 @rjbou - fix #4168; #4683 @dra27 - fix #4682; #4691 @rjbou - fix #4682]
+* (+) Add `--no` [#4582 @rjbou]
+* (+) Add a `--with-0install-solver` option to the configure script to enable
+  the 'builtin-0install' solver [#4646 @kit-ty-kate]
+* Add default cli mechanism: deprecated options are accepted (in the major
+  version) if no cli is specified [#4575 @rjbou]
+* Add `opam config` deprecated subcommands in the default cli
+  [#4575 @rjbou - fix #4503]
+* Add cli versioning for opam environment variables [#4606 @rjbou]
+* Add cli versioning for enums of flags with predefined enums [#4606 @rjbou]
+* Clearer messages about using --cli and OPAMCLI [#4655 @dra27]
+* The options `--root` and `--switch` are now reflected in environment
+  variables when building packages so that calls to `opam` during build access
+  the correct root and switch [#4668 @LasseBlaauwbroek]
+* Add cli versioning for enums of flags with predefined enums [#4626 @rjbou]
+* Preprocess `--confirm-level` for plugins calls/install [#4694 @rjbou]
+* Ensure the symlink for a plugin is maintained on each invocation
+  [#4621 @dra27 - partially fixes #4619]
+* Initialise environment variables for plugins call/install [#4582 @rjbou]
+* Expect plugins to end in .exe on Windows [#4709 @dra27]
+* Introduce a `default-invariant` config field, restore the 2.0 semantics for
+  `default-compiler` [#4607 @AltGr]
+* Fix default invariant with no system compiler [#4644 @AltGr - fix #4640]
+* Perform an hard upgrade on intermediate roots, ie root from `2.1~alpha/beta`,
+  and keep a light upgrade from `2.0` [#4638 @rjbou]
+* Send the 'opam root layout update' message to stderr [#4692 @AltGr]
+* If opam root is different from the binary, allow reading it and try to read
+  in best effort mode [#4638 @rjbou - fix #4636]
+* Don't check opam system dependencies on reinit after a format upgrade
+  [#4638 @rjbou]
+* Fix `sys-ocaml-cc`, `sys-ocaml-arch` and `sys-ocaml-libc` when no system
+  compiler installed [#4706 @dra27]
+* Fix `Not_found` (config file) in config report [#4570 @rjbou]
+* Config report: Print variables of installed compilers and their (installed)
+  dependencies [#4570 @rjbou]
+* Don't patch twice file [#4529 @rjbou]
+* With `--deps-only`, set dependencies as root packages
+  [#4964 @rjbou - fix #4502]
+* Keep global lock only if root format upgrade is performed
+  [#4612 @rjbou - fix #4597]
+* Improve installation times by only tracking files listed in `.install`
+  instead of the whole switch prefix when there are no `install:` instructions
+  (and no preinstall commands)
+  [#4494 @kit-ty-kate @rjbou; #4667 @dra27 - fix #4422]
+* Scrub OPAM* environment variables added since 2.0 from package builds to
+  prevent warnings when a package calls opam [#4663 @dra27 - fix #4660]
+* Correct the message when more than one depext is missing [#4678 @dra27]
+* Only display one conflict message when they are all owing to identical
+  missing depexts [#4678 @dra27]
+* Don't exclude base packages from rebuilds (made some sense in opam 2.0 with
+  base packages but doesn't make sense with 2.1 switch invariants) [#4569 @dra27]
+* Don't refer to base packages in messages any more
+  [#4623 @dra27 - fixes #4572]
+* Give the correct command when demonstrating switch creation
+  [#4675 @dra27 - fixes #4673]
+* On switch loading, if invariant is inferred and a write lock required, write
+  the file [#4638 @rjbou]
+* Don't look for lock files for pin depends [#4511 @rjbou - fix #4505]
+* Fetch sources when pinning an already pinned package with a different url
+  when using working directory [#4542 @rjbou - fix #4484]
+* Don't ask for confirmation for pinning base packages (similarly makes no
+  sense with 2.1 switch invariants) [#4571 @dra27]
+* Fix version pin source retrieving: mustn't error if archive opam file is
+  malformed [#4580 @rjbou]
+* `opam list --silent` renamed to `--check` [#4595 @dra27 - fix #4323]
+* Include doc field in opam-show [#4567 @dra27 - partially fix #4565]
+* Fix `switch` global variable resolving [#4685 @rjbou - fix #4684]
+* Fix `hash` package variable resolving [#4687 @rjbou]
+* Lint: Fix W59 & E60 for conf packages (no url required)
+  [#4550 @rjbou - fix #4549]
+* Lint: Fix W59 & E60 with VCS urls, don't check upstream if url has VCS
+  backend [#4635 @rjbou]
+* Lint: Add E67 checksum specified with non archive url [#4635 @rjbou]
+* Lint: Disable subpath warning E63,W64 [#4638 @rjbou]
+* Lint: Fix manpage listing [#4708 @rjbou]
+* Don't write lock file with `--read-only', `--safe`, and `--dryrun`
+  [#4562 @rjbou - fix #4320]
+* Make `opam lock` consistent with `opam install`, on local pin always take
+  last opam file even if uncommitted [#4562 @rjbou - fix #4320]
+* Opam file: Fix `features` parser [#4507 @rjbou]
+* Opam file: Rename `hidden-version` to `avoid-version` [#4527 @dra27]
+* Opam file: Fix rewriting with preserved format empty field error
+  [#4634 @rjbou - fix #4628]
+* Opam file: Switch config: Defined `invariant` field as an option to
+  differentiate when it is not defined [#4638 @rjbou]
+* Opam file: Differentiate bad format from bad (opam) version with
+  `Bad_version` exception, raised from `OpamFormat.check_opam_version`
+  [#4638 @rjbou]
+* Opam file: Always print the `opam-version` field on files [#4638 @rjbou]
+* Opam file: Config: add `opam-root-version` field as a marker for the whole
+  opam root [#4638 @rjbou - fix #4636]
+* Opam file: Add `BestEffort` modules with reading functions that don't show
+  errors, given the `opam_file_format` internal field [#4638 @rjbou - fix #4636]
+* Depext: Handle macport variants [#4509 @rjbou - fix #4297]
+* Depext: Always upgrade all the installed packages when installing a new
+  package on Archlinux [#4556 @kit-ty-kate]
+* Depext: Handle some additional environment variables (`OPAMASSUMEDEPEXTS`,
+  `OPAMNODEPEXTS`) [#4587 @AltGr]
+* Depext: Improve messages to hint that answering `no` doesn't abort
+  installation [#4591 @AltGr]
+* Depext: Add support for non-interactive mode in macports [#4676 @kit-ty-kate]
+* Depext: Handling of packages of tagged repositories for alpine
+  [#4700 @rjbou - fix #4670]
+* Depext: Clarify some `assume-depexts` related messages
+  [#4671 @AltGr - partial fix #4662]
+* Depext: Warn the user if epel-release is missing and unavailable depexts are
+  detected [#4679 @dra27 fix #4669]
+* Depext: Ignore config yes automatic answering when asking confirmation to run
+  install commands [#4698 @rjbou - fix #4680]
+* Sandbox: Fix the conflict with the environment variable name used by dune
+  [#4535 @smorimoto - fix ocaml/dune#4166]
+* Sandbox: Kill builds on Ctrl-C with bubblewrap
+  [#4530 @kit-ty-kate - fix #4400]
+* Sandbox: Linux: mount existing TMPDIR read-only, re-bind `$TMPDIR` to a
+  separate tmpfs [#4589 @AltGr]
+* Sandbox: Fix the sandbox check [#4589 @AltGr]
+* Sandbox: Fix sandbox script shell mistake that made `PWD` read-write on
+  remove actions [#4589 @AltGr]
+* Sandbox: Port bwrap improvements to sandbox_exec [#4589 @AltGr]
+* Sandbox: Fix realpath use for macos, partial revert of #4589 [#4609 @AltGr]
+* Add missing shell quoting to support space and special shell characters in
+  switch directory path [#4707 @kit-ty-kate]
+* Rename `state.cache` to include the `OpamVersion.magic()` string. All .cache
+  files are deleted if any cache file is written to, allowing multiple versions
+  of the library to co-exist without constantly regenerating it
+  [#4642 @dra27 - fix #4554]
+* Fix Cudf preprocessing [#4534 #4627 @AltGr - fix #4624]
+* Allow to upgrade to a hidden-version package if a hidden-version package is
+  already installed [#4525 @kit-ty-kate]
+* Add support for a few select criteria useful to CI to the 0install solver:
+  `+count[version-lag,solution]` to always choose the oldest version available,
+  `+removed` to not try to keep installed packages [#4631 @kit-ty-kate]
+* Fix opam-devel's tests on platforms without openssl, GNU-diff and a
+  system-wide ocaml [#4500 @kit-ty-kate]
+* Use dune to run reftests [#4376 @emillon]
+* Restrict `extlib` and `dose` version [#4517 @kit-ty-kate]
+* Restrict to `opam-file-format.2.1.2` [#4495 @rjbou]
+* Require `opam-file-format.2.1.3+` in order to enforce `opam-version: "2.1"`
+  as first non-comment line [#4639 @dra27 - fix #4394]
+* Switch to newer version of MCCS (based on newer GLPK) for src_ext
+  [#4559 @AltGr]
+* Bump dune version to 2.8.2 [#4592 @AltGr]
+* Bump the minimal dune requirement to dune 1.11 [#4437 @dra27 @kit-ty-kate]
+* 4.12 compatibility [#4437 @dra27 @kit-ty-kate]
+* Cold compiler updated to 4.12 [#4616 @dra27]
+* Fix build from source when a dune-project file is presented in the parent
+  directory [#4545 @kit-ty-kate]
+* Fix build from source when a dune-project file is presented in the parent
+  directory [#4545 @kit-ty-kate - fix #4537]
+* Fix opam-devel.install not to install two files called opam [#4664 @dra27]
+* Build release tags as non-dev versions, as for release tarballs
+  [#4665 @dra27 - fix #4656]
+* Disable dev version for tests (needed for format upgrade test) [#4638 @rjbou]
+* Add a hint for missing `openssl` in `make cold` [#4702 @rjbou]
+* Remove test field from opam-devel, they need the network [#4702 @rjbou]
+* Update src_ext for Dune and MCCS [#4704 @dra27]
+* Release scripts: switch to OCaml 4.10.2 by default, add macos/arm64 builds by
+  default [#4559 @AltGr]
+* Release scripts: add default cli version check on full archive build
+  [#4575 @rjbou]
+* Arg: Generalise `mk_tristate_opt` to `mk_state_opt` [#4575 @rjbou]
+* Arg: Fix `mk_state_opt` and rename to `mk_enum_opt` [#4626 @rjbou]
+* Arg: Add `mk_enum_opt_all` for state flags that appears more than once
+  [#4582 @rjbou]
+* Fix `opam exec` on native Windows when calling cygwin executables
+  [#4588 @AltGr]
+* Fix temporary file with a too long name causing errors on Windows
+  [#4590 @AltGr]
+* CLI: Add flag deprecation and replacement helper [#4595 @rjbou]
+* Win32 Console: fix VT100 support [#3897 #4710 @dra27]
+* Tidied the opam files [#4620 @dra27]
+* Externalise cli versioning tools from `OpamArg` into `OpamArgTools`
+  [#4606 @rjbou]
+* Each library defines its own environment variables, that fills the config
+  record [#4606 @rjbou]
+* Harden cygpath wrapper [#4625 @dra27]
+* Reset the plugin symlinks when the root is upgraded
+  [#4641 @dra27 - partial fix for #4619]
+* Formalise opam dev version detection with `OpamVersion.is_dev_version`
+  [#4665 @dra27]
+* Add `OpamStd.String.is_prefix_of` [#4694 @rjbou @dra27]
+* Fix `OpamStd.Format.pretty_list`: `last` argument dropped if list contains
+  more than 2 elements [#4694 @rjbou]
+* Run the shell hooks with closed stdin (bash, zsh) [#4692 @AltGr]
+* Improved and extended tests
+  [#4376 #4504 #4545 #4612 #4668 #4612 #4634 #4672 #4638 #4702 #4697 #4697
+  @AltGr @dra27 @emillon @rjbou]
+* Improve Github Actions
+  [#4593 #4575 #4610 #4610 #4618 #4606 #4695 #4695 @AltGr @dra27 @rjbou]
+* Improve documentation
+  [#4496 #4506 #4513 #4637 #4681 #4702
+  @dannywillems @eth-arm @kit-ty-kate @rjbou @UnixJunkie]
+
+
+2.1.0~beta4:
+* (*) Implemented CLI version compatibility layer [#4385 @rjbou]
+* (*) Return code 31 (`Sync_error`) instead of code 40
+  (`Package_operation_error`) when all failures happend during fetching
+  [#4416 @rjbou - fix #4214]
+* (+) Add `--download-only` flag [#4071 @Armael @rjbou - fix #4036]
+* (+) Provide `opam update --depexts` to request an update of the system package manager databases [#4379 @AltGr - fix #4355]
+* Set OPAMCLI=2.0 during package action commands [#4492 @kit-ty-kate]
+* Fix sandbox check on first `opam init` [#4370 @rjbou - fix #4368]
+* Print shell-appropriate eval command on `opam init` [#4427 @freevoid]
+* Fix init script check in csh [#4482 @gahr]
+* The stdout of `pre-` and `post-session` hooks is now propagated to the user [#4382 @AltGr - fix #4359]
+* `post-install` hooks are now allowed to modify or remove installed files [#4388 @lefessan]
+* Add support for switch-specific pre/post sessions hooks [#4476 @rjbou - fix #4472]
+* Ensure we don't advertise upgrades to hidden versions [#4477 @AltGr - fix #4432]
+* Fix `opam remove --autoremove <PKG>` to not autoremove unrelated packages [#4369 @AltGr - fix #4250 #4332]
+* Fix cases where `opam remove -a` could trigger conflicts in the presence of orphan packages [#4369 @AltGr - fix #4250 #4332]
+* Fix `--update-invariant` when removing or changing package name [#4360 @AltGr - fix #4353]
+* Fix updates of the invariant with `--update-invariant` [#4431 @AltGr]
+* Fix cleanup of build dirs for version pinned packages [#4436 @rjbou - fix #4255]
+* Fix opamfile format upgrade on pinning [#4366 @rjbou - fix #4365]
+* Fix `pin --show` actually pinning [#4367 @rjbou - fix #4348]
+* When several pins are needed, do their fetching in parallel [#4399 @rjbou - fix #4315]
+* Don't cleanup VCS pin source directories [#4399 @rjbou]
+* Fix `--working-dir` with local switches [#4433 @rjbou]
+* Add package variable `opamfile-loc`, containing the location of installed package opam file [#4402 @rjbou]
 * Fix `arch` detection when using 32bit mode on ARM64 [#4462 @kit-ty-kate]
 * Fix `arch` detection of i486 [#4462 @kit-ty-kate]
-* The stdout of pre- and post-session hooks is now propagated to the user
-  [#4382 @AltGr - fix #4359]
-* Run switch pre/post sessions hooks [#4476 @rjbou - fix #4472]
+* Skip loading the switch state for variable lookup when possible [#4428 @rjbou]
+* Fix package variables display when no config file is found [#4428 @rjbou]
+* Fix `opam option depext-bypass-=["XXX"]` [#4428 @rjbou]
+* Lint: add a check that strings in filtered package formula are booleans or variables [#443 @rjbou - fix #4439]
+* Fix handling of filename-encoded pkgname in opam files [#4401 @AltGr - fix ocaml-opam/opam-publish#107]
+* Don't recompile when modifying the package flags [#4477 @AltGr]
+* Add depext support for NetBSD and DragonFlyBSD [#4396 @kit-ty-kate]
+* Fix depexts on OpenBSD, FreeBSD and Gentoo: Allow short names and full name paths for ports-based systems [#4396 @kit-ty-kate]
+* Handle the case where `os-family=ubuntu` as `os-family=debian` [#4441 @alan-j-hu]
+* Update opam's opam files to 2.0 [#4371 @AltGr]
+* Makefile: Add rule `custom-libinstall` for `opam-custom-install` use [#4401 @AltGr]
+* Use the archive caches when running `opam admin cache` [#4384 @AltGr - fix #4352]
+* Fix explosion of `opam admin check --cycles` on repositories with huge cliques [#4392 @AltGr]
+* Much improved format-preserving printer [#4298 #4302 @rjbou - fix #3993]
+* Fix missing conflict message when trying to remove required packages [#4362 @AltGr]
+* Fix the Z3 backend for upgrades [#4393 @AltGr]
+* Fix cases where opam would wrongly complain about action cycles [#4358 @AltGr - fix #4357]
+* Fix permission denied fallback for openssl [#4449 @Blaisorblade - fix #4448]
+* Add debug & verbose log for patch & subst applications [#4464 @rjbou - fix #4453]
+* Be more robust w.r.t. new caches updates when `--read-only` is not used [#4467 @AltGr - fix #4354]
+* Improved and extended tests [#4375 #4395 #4428 #4385 #4467 #4475 #4483 @emillon @rjbou @AltGr @freevoid @dra27]
+* Switched to Github actions [#4463 @rjbou]
 
+2.1.0~beta2:
+* Reduced startup times, in particular for `opam exec` [#4341 @altgr]
+* Fixed the sandboxing check on fresh inits [#4342 @altgr]
+* Fixed cases where `--with-version` was not respected by `opam pin` [#4346 @altgr]
+* Upgraded the bootstrap OCaml compiler from 4.09.1 to 4.11.1 [#4242 @avsm @dra27 @MisterDA @rjbou]
+
+2.1.0~beta:
+* (*) `--cli` / `OPAMCLI` option added [#4316 @dra27]
+* `--help/--version` documented in wrong section for aliases [#4317 @dra27]
+* `opam lock --help` missing common information {#4317 @dra27]
+* (+) `--yes` passed to all commands, and plugins [#4316 @dra27]
+* On init, check availability of sandbox and propose to disable
+  [#4284 @rjbou - fix #4089]
+* config upgrade: on the fly upgrade if no write lock required [#4313 @rjbou]
+* (*) Add `pin scan` subcommand to list available pins [#4285 @rjbou]
+* (*) Add `--normalise` option to print a normalised list when scanning, that can
+  be taken by `opam pin add` [#4285 @rjbou]
+* (*) Add `with-version` option to set the pinned package version [#4301 @rjbou]
+* Add error message in case git repo is empty [#4303 @rjbou - fix #3905]
+* Lock: Support -d as alias of --direct-only (to match plugin) [#4319 @dra27]
+* Switch: Support -n as an alias of --no-action (to match opam-pin)
+  [#4324 @dra27]
+* List: <field> form no longer advertised as valid for --columns [#4322 @dra27]
+* Admin: <field> form no longer advertised as valid for --columns in list
+  [#4322 @dra27]
+* Solver: Don't penalise packages with more recent 'hidden-versions'
+  [#4312 @AltGr]
+* `OpamCommand.pin` refactor, including adding `OpamClient.PIN.url_pins` to pin
+  a list of package with url  [#4285 #4301 @rjbou]
+* `OpamPinCommand.source_pin', for new package confirmation, don't check that
+  no opam file is given as argument [#4301 @rjbou]
+* CLI: Provide all functions in the client library [#4329 @AltGr]
+* Process: don't display status line if not verbose, and status line disabled
+  [#4285 @rjbou]
+* Optimise package name comparison [#4328 @AltGr - fix #4245]
+
+2.1.0~alpha3:
+* Confirmation on non-compiler switch invariant: not on dryrun, Y by default
+  [#4289 @AltGr]
+* (*) Fix pin kind automatic detection consistency [#4300 @rjbou]: With `opam
+  pin target', when opam file is not versioned and at root, vcs-pin the package
+  instead of path-pin, and with `opam pin add nv target', take opam file even
+  if not versioned.
+* External dependencies: Fix non-interactive mode on OpenSuse [#4293
+  @kit-ty-kate]
+* src-ext: bump topkg to 1.0.2 and dune to 2.6.2, with a second compiler
+  built in case main one is < 4.07.0 (dune restriction) [#4294 @dra27]
+* Allow Z3 backend to return sub-optimal solutions on timeout, add
+  `OPAMSOLVERALLOWSUBOPTIMAL` environment variable [#4289 @AltGr]
+* Add an optional solver relying on opam-0install-cudf [#4240 @kit-ty-kate]
+
+2.1.0~alpha2:
+* Remove m4 from the list of recommended tools [#4184 @kit-ty-kate]
+* Fix config solver field ignored at init [#4243 @rjbou - fix #4241]
+* Fix atoms formula restriction with `--all` at upgrade [#4221 @rjbou - fix
+  #4218]
+* Copy instead of calling rsync when archives are in a local cache [#4270
+  @kit-ty-kate]
+* Opam file build using dune, removal of opam-%.install makefile target
+  [#4178 @rjbou #4229 @kit-ty-kate - fix #4173]
+* Use version var in opam file instead of equal current version number in
+  opamlib dependencies [#4178 @rjbou]
+* src ext: fix extlib url [#4248 @rjbou]
+* Add `_build` to rsync exclusion list [#4230 @rjbou - fix #4195]
+* Recursive opam file lookup: ignore `_build` [#4230 @rjbou]
+* Assume-built fix & rewriting [#4211 @rjbou]
+* Fix autoremove env var handling [#4219 @rjbou - fix #4217]
+* Fix Not_found with `opam switch create . --deps` [#4151 @AltGr]
+* Package Var: resolve self `name` variable for orphan packages [#4228 @rjbou
+  - fix #4224]
+* (*) Reject (shell) character on switch names [#4237 @rjbou - fix #4231]
+* Fix `OPAMSWITCH` empty string setting, consider as unset [#4237 @rjbou]
+* opam-installer: For paths, remove use of empty switch in favor of a
+  context-less module [#4237 @rjbou]
+* Add missing depext to unavailable reasons [#4194 @rjbou #4279 @rjbou - fix
+  #4176]
+* (*) Bump config file version to 2.1 (new depext fields) [#4280 @rjbou - fix
+  #4266]
+* Add depext handling on new pinned packages [#4194 @rjbou - fix #4189]
+* Don't keep unpinned package version if it exists in repo [#4073 @rjbou -
+  fix #3630]
+* Fix path resolving when pinning with `file://` [#4209 @rjbou - fix #4208]
+* (*) Disable recursive & subpath pinning (only present experimentally in opam
+  2.1.0~alpha) [#4252 @rjbou]
+* Add switch depext-bypass as modifiable field [#4194 @rjbou - fix #4177]
+* Add `--no-depexts` option to disable depexts packages unavailability [#4194
+  @rjbou - fix #4205]
+* Warn if packages are not listed because of depexts unavailability [#4194
+  @rjbou - fix #4205]
+* (*) Display error message for all not found packages [#4179 @rjbou - fix
+  #4164]
+* (*) Keep package order given via cli [#4179 @rjbou - fix #4163]
+* `--sort`` apply to with all options, not only `--just-file` [#4179 @rjbou]
+* Add scope display to Not found message [#4192 @rjbou]
+* No scope needed for variable display [#4192 @rjbou - fix #4183]
+* Fix package variable resolution [#4192 @rjbou - fix #4182]
+* opam option: Fix messages advertising a command in an obsolete format
+  [#4194 @rjbou]
+* E65: check that url local paths are absolute [#4209 @rjbou]
+* Fix arch query depext [#4200 @rjbou]
+* Add message when adding a package to `depext-bypass` [#4194 @rjbou]
+* Fix performance issue of depext under Docker/debian [#4165 @AltGr]
+* Handle debian virtual packages [#4269 @AltGr @rjbou - fix #4251]
+* Refactor `OpamSysInteract` package status [#4152 #4200 @rjbou]
+* Add environment variables handling on depext query [#4200 @rjbou]
+* Add depext Macport support [#4152 @rjbou]
+* Homebrew/depext: add no auto update env var for install, accept `pkgname`
+  and `pkgname@version` on query [#4200 @rjbou]
+* Tag packages with missing depexts in Cudf [#4235 @AltGr]
+* Force LC_ALL=C for depext query commands [#4200 @rjbou]
+* Put back opam-depext-2.0's behaviour with regards to asking users' consent
+  before installing system packages [#4168 @kit-ty-kate @rjbou]
+* Add OPAMDEPEXTYES env variable to pass --yes options to system package
+  manager [#4168 @kit-ty-kate @rjbou]
+* Fix system install command dryrun [#4200 @rjbou]
+* (+) Add --depext-only to install only external dependencies, regardless of
+  config depext status [#4238 @rjbou]
+* Move system install confirmation message after opam packages install [#4238
+  @rjbou]
+* Error if '--depext-only' is given with '--assume-depexts' or '--no-depexts'
+  [#4238 @rjbou]
+* Sanddbox: no error when linked directory doesn't exist (e.g. XDG defined)
+  [#4278 @kit-ty-kate]
+* Sandbox: add quotes to avoid space unwanted behaviors [#4278 @kit-ty-kate]
+* Fix temp files repository cleaning [#4197 @rjbou]
+* Fix admin cache synchronisation message [#4193 @rjbou - fix #4167]
+* Fix mismatching extra files detection [#4198 @rjbou]
+* Fix Cudf generation for compat with external solvers [#4261 @AltGr]
+* Check for a solution before calling the solver [#4263 @AltGr]
+* Add the package flag 'hidden-version' to discourage selection by the solver
+  [#4281 @AltGr]
+* Tweak the default criteria to handle 'missing-depexts' and 'hidden-version'
+  flags [#4281 @AltGr]
+* Disable chrono when timestamps are disables [#4206 @rjbou]
+* Expose some functionality in the `OpamAction`, `OpamPath` and
+  `OpamSwitchState` modules for use without a `switch` value (introduce a
+  functor to permit replicating switch layout in different contexts) [#4147
+  @timberston]
+* Std: Add map_reduce to Set and Map [#4263 @AltGr]
+* Fix regression in command resolution from #4072 (ocaml code for looking up
+  commands in PATH) [#4265 @dra27]
+* Use OCaml 4.09.1 for the make cold target [#4257 @dra27]
+* Add show cram test [#4206 @rjbou]
+* Add envrionnement variable handling on cram test [#4206 @rjbou]
+
+
+2.1.0~alpha:
+* Recursive & subpath based pin [#3499 @rjbou @hngrgr - fix #3174 #3477]
+* Define switch invariants rather than "base packages" [#3894 @AltGr]
+* Don't warn on switch creation with 'ocaml' as invariant [#4108 @AltGr]
+* Better error handling on switch creation [#4121 @AltGr]
+* Integrate lock plugin [#3746 @rjbou - fix #3734 #3769 #3694]
+* Add configuration modifications as opam config subcommands [#3992 @rjbou]
+* opam var and opam option outside of opam config [#4116 @rjbou - fix #4119]
+* Enable option var optimisation switch load [#4138 @rjbou]
+* Integrate depext plugin [#3975 @rjbou @AltGr - fix #3790 #1519 #2426 #3692]
+* Enable command/output display only from verbose level 3 [#4141 @rjbou]
+* Add `opam install --check <pkg>` checks that `<pkg>` dependencies are already
+  installed in the switch. It reports missing ones and exits with 1, 0 otherwise.
+  It is used on a check only purpose, additionally to `--deps-only`.
+  [#3854 @rjbou - fix #3823]
+* Add `opam install <pkg> --ignore-conflicts` to use with `--deps-only` in case
+  it is needed to install dependencies without taking conflicts into account.
+  [#3853 @rjbou - fix #3846]
+* Add `opam show --just-file <file>` shows information of a given file,
+  without loading the switch state. It can be combined with other options, as
+  field filter `--field`. It deprecates `--file` option. [#3729 @rjbou - fix
+  #3721]
+* Add `opam show --all-versions <pkg>` displays information of all versions of
+  the given package. It can be used in combination of field filter. [#3867 @rjbou
+  - fix #2980]
+* Add `opam show --sort <pkg>` display on stdout a sorted opam file: all fields
+  are alphabetically sorted. [#3866 @rjbou - fix ocaml/opam2web#173]
+* opam show better error handling. [#4118 @rjbou - fix #3875]
+* `opam show --field` are no longer required to end with a colon.
+  [#3931 @rjbou]
+* (*) `opam show --normalise` disable terminal width wrapping. [#3868 @rjbou -
+  fix #3751]
+* `opam env --check` permit to indicates if an opam environment is
+  synchronized: returns 0 if up-to-date, 1 otherwise. [#4074 @rjbou - fix #3725]
+* Add `opam switch export --freeze` to record VCS commit hash when a VCS url is
+  specified. [#4055 @hannesm]
+* Add `opam switch export --full` option, include extra-files in switch export,
+  on import create an overlay directory with the file contents. [#4040 @hannesm]
+* Optimize repository loading: we store the repository contents as .tar.gz
+  files in ~/.opam/repo instead. [#3752 @AltGr - fix #3721]
+* Handle failure or interruption of tar during `opam update`. [#3861 @AltGr]
+* Fallback in case repository archive doesn't exist. [#4008 @rjbou]
+* In case repository archive is corrupted, delete it and ask to launch an
+  update. [#4075 @rjbou - fix #4053]
+* When adding a repository, an error is displayed in case of mismatching urls,
+  now both urls are displayed. [#4086 @rjbou - fix #4085]
+* Handle url backend change to VCS of a package from repository. [#4007 @rjbou
+  - fix #3991]
+* Allow local compiler switch creation. [#3720 @rjbou - fix #3713]
+* Switch creation, fix multiple compiler candidate. [#3884 @rjbou - fix #3874]
+* Make reinstall handling stricter. [#3907 @AltGr]
+* (*) `opam list --resolve`: restrain test dependencies to direct one instead of
+  listing all test dependencies of queried package(s) [#3923 @rjbou - fix
+  ocaml/opam-depext#121]
+* Update pin-depends confirmation message to add a skip option. [#3852 @rjbou -
+  fix #3840]
+* Add OPAMDROPWORKINGDIR environment variable for C. [#3792 @rjbou - fix #3727]
+* Don't restrain copy to versioned file. [#3759 @rjbou]
+* Don't fetch sources when working-dir is set. [#4046 @rjbou]
+* Update in place source copy: [#3948 @rjbou]
+  - review `sync_dirty` on VCS:
+    - use VCS to synchronize, then rsync & remove others files
+    - exclude `_build`, `_opam` & VCS directories
+  - when `--inplace-build` is given, it does a dirty synchronization of the
+    sources, in order to keep tracking package stats (clean, local or dirty).
+* Fix `working-dir` messages on update command. [#3824 @rjbou]
+* Working-dir fixes. [#3982 @rjbou]
+* Update download errors handling during actions processing. [#3811 @AltGr]
+* Update `ftp` command, to pass url last. [#3910 @hannesm]
+* Terminate (with double dashes) list of command-line download option.
+  [#3913 @cfcs]
+* Repository: remove 'file://' prefix for darcs. [#3761 @rjbou]
+* Opam{Git,Hg}: Fix diffs in presence of binary file. [#3879 @kit-ty-kate]
+* Set core.autocrlf and core.eol for Git remotes. [#3882 @dra27]
+* Add a git clean on `reset_tree` to keep source dir clean. [#3948 @rjbou]
+* Lint W62: Add a lint check for SPDX license. [#3976 @AltGr]
+* Lint: add result in json output. [#3848 @rjbou - fix #3046]
+* Add lint codes in manpage. [#3903 @rjbou]
+* Default configuration file: add `getconf` to required tools. [#3813 @rjbou]
+* Clarify message in `opam init --yes`. [#3892 @dra27]
+* Shell setup: don't advice an infinite sourcing loop. [#3832 @rjbou]
+* Default configuration file: Add compilation target globals, `sys-ocaml-arch,
+  `sys-ocaml-cc`, and `sys-ocaml-libc`. [#3900 @dra27]
+* Ensure that environment is initialized lazily, not before init functions are
+  called [#4111 @gasche]
+* Fix OPAMLOGS handling, and logdir `opam_init` argument [#4117 @rjbou - fix
+  #4076]
+* Include base packages configuration variables in opam config report.
+  [#3798 @dra27]
+* Determine jobs number at launch (`OpamStateConfig`) [#4004 @rjbou - fix
+  #3986]
+* Fully test native Windows in the testsuite. [#3260 @dra27]
+* Allow native Windows to use Cygwin tool. [#3348 @dra27]
+* Deal with Windows path conventions (backslashes, .exe, etc.) [#3350 @dra27]
+* Correct display of dir separator on Windows. [#3893 @dra27]
+* Tested wrong variable in OPAMW_HasGlyp. [#3898 @dra27]
+* Default use `fetch` on FreeBSD, `ftp` on OpenBSD. [#3904 @hannesm]
+* Don't overwrite user's sandbow script modification. [#4020 #4092 @rjbou]
+* Handle `CCACHE_DIR` environment variable in sandbox script. [#4087 @rjbou -
+  fix #4079]
+* Follow links of `~/.cache` & `~/.cache/dune` for bwrap call. [#4087 @rjbou -
+  fix #4086]
+* On MacOS sandbox script, always read write mount `/tmp` [#3742 @rjbou - fix
+  ocaml/opam-repository#13339]
+* Environment file right handling for empty switch. [#3899 @dra27]
+* Add colon for fish MANPATH fix. [#4084 @rjbou - fix #4078]
+* Update zsh check interactive terminal [#4095 @OCamlPro-mattiasdrp #4128
+  @AltGr]
+* Add package selection to `opam admin add-hashes` [#3787 @rjbou - fix #3767]
+* Download files (patches, etc.) using a safe filename. [#3900 @dra27]
+* `opam admin --add-constraints`, add constraint on depopts. [#4002 @rjbou -
+  fix #3994]
+* Add `format-version` field to all opam files. [#3478 @AltGr] [#3906 @AltGr]
+* Clarify pin depend parse error. [#3762 @rjbou]
+* Opam file extensions (`x-` fields) enhancement. [#4049 @hannesm]
+* Add support for Z3 as a solver backend. [#3845 @AltGr]
+* Interleave download actions with build/install actions. [#3777 @Armael]
+  [#4083 @rjbou - fix #4080]
+* Generalization of the job scheduler: provide separate job pools for different
+  subsets of the tasks. [#3778 @AltGr]
+* Refactor the return types of `OpamSolution.{apply,resolve_and_apply}`
+  [#3781 @Armael]
+* Use the scheduler pools to respect the download-jobs parameter.
+  [#3791 @AltGr]
+* Set the right opam file `format-version` field on upgrade. [#4014 @rjbou]
+* Streamline the output from download action. [#3794 @AltGr]
+* Use a character that displays better on terminals for download action. [
+  #3802 @AltGr]
+* Change symbol for download action. [#3862 @AltGr]
+* Include the version number in "compilation failed" message. [#4052 @Armael]
+* Propagate `--force` remove option to directory tracking revert function.
+  [#4094 @rjbou - fix #4091]
+* Add `OpamDirTack.string_of_changes` [#4107 @rjbou @hannesm]
+* Introduce state `drop` function to replace `ignore (unlock ..)` for more
+  lock-type-safety. [#3783 @gasche - #3812 @rjbou]
+* Change `OpamStateTypes.switch_state.conf_files `from package_map` to
+  `name_map` [#3799 @dra27]
+* Fix handling of availability outside of switches. [#3864 @AltGr]
+* Sorting formulas function. [#3945 @rjbou]
+* Sort formula: fix `compare_formula` & add `compare` [#3960 @rjbou]
+* Patch rewrite test. [#3456 @dra27]
+* Command errors display: differentiate command not found & permission denied.
+  [#3865 @rjbou]
+* Factorize option functions in `OpamProcess` [#4016 @nobrakal]
+* Use ocaml code for looking up commands in `PATH` [#4072 @Armael]
+* Copy files using OCaml code instead of calling to cp or install
+  [#4064 @Armael]
+* Sort & clean pkg:depend. [#4060 @rjbou - fix #4057]
+* Add `of_json` functions & crowbar. [#3776 @gasche]
+* JSON (de)serialization for OpamParallel graph. [#3786 @gasche]
+* Url: catch failure & specific exception. [#3946 @rjbou]
+* Update: don't update installed dev package that is not pinned. [#3947 @rjbou]
+* Use `OpamArg` helpers for option. [#4059 @rjbou]
+* Steps towards sudo-enabled make install. [#3522 @dra27]
+* Port build system to Dune (1.2) [#3618 @dra27]
+* Update shell/msvs-detect to 0.4.0. [#3869 @dra27]
+* Sort out repository script mode. [#3963 @dra27]
+* Preliminary support for Dune 2.0. [#3965 @dra27]
+* Update mccs.1.1+11 [#4109 #4146 @MisterDA]
+* Fix developer mode option. [#3646 @rjbou]
+* Ensure configure generates consistently. [#3935 @dra27]
+* Documentation [#3542 @0xflotus] [#3571 @hannesm] [#3780 @gasche]
+  [#3944 @tchajed] [#3955 @nbraud] [#4106 @vp2177] [#3863 @dra27] [#3554 @rjbou - fix
+  #3540 #2255c #3612 #3606c] [#4058 @rjbou] [#4114 @rjbou @AltGr]
 
 2.0.7:
-* Properly escape Windows paths on manpages [#4129 @AltGr @rjbou]
-* Fix opam installer opam file [#4058 @rjbou]
-* Fix various warnings [#4132 @rjbou @AltGr - fix 4100]
-* Fix dune 2.5.0 promote-install-files duplication [#4132 @rjbou ]
-* opam exec: display command not found message [#4133 @rjbou - fix #4131]
+* opam exec: display command not found message. [#4133 @rjbou - fix #4131]
+* Escape Windows paths on manpages. [#4129 @AltGr @rjbou - fix #4100]
+* Fix opam installer opam file. [#4058 @rjbou]
+* Fix various warnings. [#4132 @rjbou @AltGr - fix #4100]
 
 2.0.6:
-* Don't remove git cache objects that may be used [#3831 @AltGr]
-* Don't include .gitattributes in index.tar.gz [#3873 @dra27]
-* Update FAQ uri [#3941 @dra27]
-* Lock: add warning in case of missing locked file [#3939 @rjbou]
-* Directory tracking: fix cached entries retrieving with precise
-  tracking [#4038 @hannesm]
-* Build:
-  * Add sanity checks [#3934 @dra27]
-  * Build man pages using dune [#3902] #dra27]
-  * Add patch and bunzip check for make cold [#4006 @rjbou - fix #3842]
-* Shell:
-  * fish: add colon for fish manpath [#3886 @rjbou - fix #3878]
-* Sandbox:
-    * Add dune cache as rw [#4019 @rjbou - fix #4012]
-    * Do not fail if $HOME/.ccache is missing [#3957 @mseri]
-* opam-devel file: avoid copying extraneous files in opam-devel example [#3999 @maroneze]
+* Do not fail if `$HOME/.ccache` is missing. [#3957 @mseri - fix
+  https://discuss.ocaml.org/t/dune-1-11-1-compilation-failed/4248]
+* Add dune cache as rw. [#4019 @rjbou - fix #4012]
+* Check both size and mtime for dirtrack cached entries. [#4038 @hannesm]
+* Build man pages with dune. [#3937 @AltGr @dra27]
+* make cold: fail if patch or bunzip2 missing. [#4006 @rjbou - fix #3842]
+* Documentation [#3999 @maroneze]
 
 2.0.5:
-* Bump src_ext Dune to 1.6.3, allows compilation with OCaml 4.08.0. [#3887 @dra27]
-* Support Dune 1.7.0 and later [#3888 @dra27 - fix #3870]
-* Bump the ocaml_mccs lib-ext, to include latest changes [#3896 @AltGr]
-* Fix cppo detection in configure [#3917 @dra27]
-* Read jobs variable from OpamStateConfig [#3916 @dra27]
-* Linting:
-  * add check upstream option [#3758 @rjbou]
-  * add warning for with-test in run-test field [#3765, #3860 @rjbou]
-  * fix misleading `doc` filter warning [#3871 @rjbou]
-* Fix typos [#3891 @dra27, @mehdid]
+* `opam lint --check-upstream` enables lint checks on archive urls. This
+  option lead to download archives to check their checksum. [#3758 @rjbou]
+* Lint W59: No url checksum given (if `check-upstream` enabled).
+  [#3758 @rjbou]
+* Lint E60: Unavailable archive or checksum mismatching (if `check-upstream`
+  enabled). [#3758 @rjbou]
+* Lint E61: Out-of-scope `with-test` variable in `run-test:` field.
+  [#3763 @rjbou - fix AltGr/Camelus/issues/27]
+* Lint W58: Restrain warning to filters. [#3871 @rjbou - fix
+  ocaml/opam-repository#14280 (comment)]
+* Lint E61: Restrain to `run-test:`. [#3860 @rjbou]
+* Read jobs variable from `OpamStateConfig` [#3881 @dra27]
+* Fix cppo detection. [#3915 @rjbou]
+* Documentation [#3809#3891 @dra27]
 
 2.0.4:
-* Add (rudimentary) error handling to `make man`
-* Sandboxing on MacOS: considering the possibility that TMPDIR in unset
-* display: Fix opam var display
-* pin:
-  * update source of (version) pinned directory
-  * fix `--ignore-pin-depends` with autopin
-  * fix pinnings not installing/upgrading already pinned packages (introduced in 2.0.2)
-* opam clean: Ignore errors trying to remove directories
-* remove wrong mismatching extra-files warning
-* urls: fix hg opam 1.2 url parsing
-* lint: warning error 47 on descr first line
-* dirtrack: fix precise tracking mode
-* system:
-  * lock & signals: don't interrupt at non terminal signals
-  * shell: fix fish manpath setting
-  * git: use git -c diff.noprefix=false diff in case it is defined in user config
+* Remove mismatching extra-files: sort list before comparing them.
+  [#3744 @rjbou]
+* Update source of (version) pinned directory. [#3726 @rjbou - fix #3651]
+* Fix `--ignore-pin-depends` with autopin. [#3736 @AltGr]
+* Fix pin not installing/upgrading already pinned package. [#3800 @AltGr]
+* Fix hg opam1.2 url parsing. [#3754 @rjbou]
+* Use `git -c diff.noprefix=false diff`. [#3788/#3628 @Blaisorblade - fix
+  #3627]
+* Lint W47: Update warning message. [#3753 @rjbou - fix #3738]
+* Harmonization of `opam config list` and `opam config var <var>`: resolve
+  variable first with switch state (loading it only for package defined
+  variables), otherwise, global state. [#3723 @rjbou - fix #3717]
+* Considering the possibility that TMPDIR is unset. [#3597 @herbelin - fix
+  #3576]
+* Unconditionally display MANPATH when fish version is 2.7 or late.
+  [#3728 @gregory-nisbet]
+* Fix precise tracking mode: missing `to_hex` conversion. [#3796 @rjbou]
+* Catch signal to select ones that are really cancelling a blocking state (e.g.
+  waiting for a lock to be released). [#3541 @rjbou]
+* `opam clean`: ignore errors trying to remove directories.
+  [#3732 @kit-ty-kate]
+* Documentation [#3731 @MisterDA]
 
 2.0.3:
-* Fix manpage remaining $ (OPAMBESTEFFORT)
-* Fix OPAMROOTISOK handling
-* Regenerate missing environment file
+* On init, retrieve `root is ok` from global options instead of initialization.
+  [#3704 @rjbou - fix #3695]
+* Regenerate missing environment file. [#3691 @rjbou - fix #3690 #3594]
+* Documentation [#3703 @rjbou - fix #3700]
 
 2.0.2:
-* Update build from jbuilder to dune
-* Doc:
-  * update man page
-  * add message for deprecated options
-  * reinsert removed ones
-  * deprecate `no-aspcud`
-* Pin:
-  * upgrade pin depends on pinning
-  * include descr & url files on pinning 1.2 opam files
-* Sandbox:
-  * handle symlinks in bwrap
-  * allow use of internal sockets on
-  * change one-line conditional to if statement which was incompatible with set -e
-  * make /var readonly instead of empty and rw
-* Path: resolve default opam root path
-* System: suffix .out for read_command_output stdout files (#3644)
-* Locked: check consistency with opam file when reading lock file to suggest regeneration message
-* Show: remove pin depends messages
-* Cudf: Fix closure computation in the presence of cycles
-* List: Fix some cases of listing coinstallable packages
-* Format upgrade: extract archived source files of version-pinned packages
-* Core: add is_archive in OpamSystem and OpamFilename
-* Init: don't fail if empty compiler given
-* Lint: fix light_uninstall flag for error 52
-* Update cold compiler to 4.07.1
+* Check consistency with opam file when reading lock file to suggest
+  regeneration message [#3680 @rjbou - fix #3654]
+* Remove pin depends messages. [#3679 @rjbou]
+* Upgrade pin depends on pinning. [#3684 @rjbou - fix #3508]
+* To avoid lint warning 57 (description error) on 1.2 opam file pinning, add
+  auxiliary files (descr, url) before linting. [#3687 @rjbou]
+* Don't check hash with --no-checksum on pull_upstream. [#3658 @rjbou - fix
+  #3652]
+* Lint E52: Fix `light_uninstall` flag. [#3631 @rjbou - fix #3625]
+* On init, don't fail if empty compiler given. [#3633 @rjbou - fix #3614]
+* Sandbox: make `/var` read-only instead of empty and rw. [#3605 @bobot - fix
+  #3604]
+* Handle symlinks in bwrap sandbox. [#3661 @mroch - fix #3660]
+* Sandbox: Change one-line conditional to `if` statement which was incompatible
+  with `set -e`. [#3645 @rjbou - fix #3607]
+* Release use of unix sockets on MacOS. [#3663 @silene - fix #3659]
+* Fix closure computation in the presence of cycle. [#3670 @AltGr - fix #3662
+  #3666]
+* Fix some cases of listing coinstallable package. [#3689 @AltGr]
+* Extract archived source files of version-pinned packages. [#3610 @rjbou - fix
+  #3600]
+* Add function to upgrade opam file, including its auxiliary files: descr, url,
+  files/. [#3624 @rjbou]
+* Set `.out` suffix for `read_command_output` stdout file. [#3644 @rjbou]
+  {2.0.2}
+* Default opam root is resolved at creation, in order to have the correct
+  linked path. [#3681 @rjbou - fix #3622]
+* Reinsert and deprecate `alias-of` & `no-autoinstall` option. [#3685 @rjbou -
+  fix #3390]
+* Updates for OCaml 4.07. [#3474 @dra27]
+* Documentation [#3656 @rjbou - fix #3634 #3653 #3639] [#3685 @rjbou - fix
+  #3390]
 
 2.0.1:
-* Cold boot for MacOS/CentOS/Alpine
-* Install checksum validation on MacOS
-* Archive extraction for OpenBSD now defaults to using gtar
-* Fix compilation of mccs on MacOS and Nix platforms
-* Do not use GNU-sed specific features in the release Makefile, to fix build on OpenBSD/FreeBSD
-* Cleaning to enable reproducible builds
-* Update configure scripts
-* git: fix git fetch by sha1 for git < 2.14
-* linting: add test variable warning and empty description error
-* upgrade: convert pinned but not installed opam files
-* error reporting: more comprehensible error message for tar extraction, and upgrade of git-url compilers
-* opam show: upgrade given local files
-* list: as opam 2.0.0 list doesn't return non-zero code if list is empty, add --silent option for a silent output and returns 1 if list is empty
+* Add `opam list --silent` to not write in the output, exit with return
+  code 0 if the list is not empty, 1 otherwise. [#3533 @rjbou - fix #3525]
+* Fix `opam list --external` [#3558 @rjbou - fix #3557
+  ocaml/opam-repository#12677]
+* Show command with local opam file returns local file information. Fixes also
+  the non 1.2 conversion to 2.0 format of local files with `opam show --raw`.
+  [#3536 @rjbou - fix #3423]
+* Show command display string fields printed with quotes, as lists.
+  [#3368 @rjbou - fix #3365]
+* Pin edit: fix editing an opam file without a name field. [#3535 @rjbou]
+* Don't execute validation hook if update is empty. [#3490 @hannesm]
+* Git: fallback, fetch all repository remotes to get SHA1 with git < 2.1.
+  [#3561 @rjbou - fix #3523 #3548]
+* Lint E57: A description or a synopsis must be present and non empty.
+  [#3581 @rjbou - fix ocaml/opam-repository#12729]
+* Lint W58: Advise to use `with-test` and `with-doc` variables if `test`
+  and `doc` are present. [#3591 @rjbou - fix #3580 ocaml/opam-repository#12729]
+* Add `gtar` as OpenBSD required tool, as tar does not support the `J` flag.
+  [#3538 @adamsteen]
+* Hash: fallback to internal library in case of openssl error. [#3543 @rjbou -
+  fix ocaml/opam-repository#12613]
+* Respect user's TMPDIR when invoking bwrap sandbox. [#3487 @3noch]
+* Add a way to mount unusual path in bwrap sandbox: introduction of
+  `OPAM_USER_PATH_RO` environment variable. [#3540 @ErwanGa]
+* opam admin: handle non http backend on repository upgrade: compute hash only
+  for http or distant rsync backend [#3596 @rjbou - fix #3590]
+* Upgrade to opam 2.0 format overlay opam files of pinned package.
+  [#3528 @rjbou - fix #3513]
+* Add compiler file translation to opam 2.0 format function. [#3530 @rjbou -
+  fix ocaml/opam-repository#12523]
+* Tar extract fail error message: if a tar extract fails, it checks the
+  presence of underlying commands (bzip2, xz, lzma, gzip) to display the error
+  message in verbose mode. [#3502 @rjbou - fix #3497]
+* Remove link files only if it exists. [#3519 @rjbou - fix
+  ocaml/opam-depext#104]
+* Remove GNUism from bootstrap-ocaml.sh [#3481 @dra27 - fix #3480]
+* Avoid sed -i, a GNU sed extension, use mv instead [#3603 @hannesm]
+* Add patch & bunzip2 check in configure. [#3531 @rjbou - fix #3520]
+* Not having wget or curl is now only a hard-error if src_ext/archives doesn't
+  contain the archives (i.e. if make -C src_ext cache-archives has not been run)
+  which means that this should no longer be a requirement for building with the
+  "full" tarball. [#3572 @dra27 - fix #3551]
+* C++ test for MCCS is now moved to the correct place and the message as to
+  whether the solver will be build should work correctly with --disable-checks.
+  Note that not having a C++ compiler is not considered an error if
+  --disable-checks is specified because configure is permitted to believe that
+  the MCCS library exists even if it couldn't detect it. [#3572 @dra27]
 
 2.0.0
 * Fixes and documentation

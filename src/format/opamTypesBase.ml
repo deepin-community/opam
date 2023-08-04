@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -9,6 +9,7 @@
 (*                                                                        *)
 (**************************************************************************)
 
+open OpamParserTypes.FullPos
 open OpamTypes
 
 include OpamCompat
@@ -49,22 +50,42 @@ let string_of_shell = function
   | SH_bash -> "bash"
 
 let file_null = ""
-let pos_file filename = OpamFilename.to_string filename, -1, -1
-let pos_null = file_null, -1, -1
+let pos_file filename =
+  { filename = OpamFilename.to_string filename;
+    start = -1, -1;
+    stop = -1, -1;
+  }
+let pos_null =
+  { filename = file_null;
+    start = -1, -1;
+    stop = -1, -1;
+  }
+let nullify_pos pelem = {pelem; pos = pos_null}
 
-let pos_best (f1,_li1,col1 as pos1) (f2,_li2,_col2 as pos2) =
+(* XXX update *)
+let pos_best pos1 pos2 =
+  match pos1, pos2 with
+  | { filename = ""; _ }, _ -> pos2
+  | _, { filename = ""; _ } -> pos1
+  | { start = (-1,_) ; _ }, _ -> pos2
+  | _, { start = (-1,_) ; _ } -> pos1
+  | _, _ -> pos1
+
+(*
   if f1 = file_null then pos2
   else if f2 = file_null then pos1
   else if col1 = -1 then pos2
   else pos1
+*)
 
-let string_of_pos (file,line,col) =
-  file ^
-  if line >= 0 then
-    ":" ^ string_of_int line ^
-    if col >= 0 then ":" ^ string_of_int col
-    else ""
-  else ""
+let string_of_pos pos =
+  let check x = if x >= 0 then string_of_int x else "-" in
+  Printf.sprintf "%s:%s:%s-%s:%s:"
+    pos.filename
+    (check (fst pos.start))
+    (check (snd pos.start))
+    (check (fst pos.stop))
+    (check (snd pos.stop))
 
 let string_of_user_action = function
   | Query -> "query"
@@ -136,6 +157,7 @@ let string_of_pkg_flag = function
   | Pkgflag_Plugin -> "plugin"
   | Pkgflag_Compiler -> "compiler"
   | Pkgflag_Conf -> "conf"
+  | Pkgflag_AvoidVersion -> "avoid-version"
   | Pkgflag_Unknown s -> s
 
 let pkg_flag_of_string = function
@@ -144,14 +166,15 @@ let pkg_flag_of_string = function
   | "plugin" -> Pkgflag_Plugin
   | "compiler" -> Pkgflag_Compiler
   | "conf" -> Pkgflag_Conf
+  | "avoid-version" -> Pkgflag_AvoidVersion
   | s -> Pkgflag_Unknown s
 
 let action_contents = function
-  | `Remove p | `Install p | `Reinstall p | `Build p -> p
+  | `Remove p | `Install p | `Reinstall p | `Build p | `Fetch p -> p
   | `Change (_,_,p) -> p
 
 let full_action_contents = function
-  | `Remove p | `Install p | `Reinstall p | `Build p -> [p]
+  | `Remove p | `Install p | `Reinstall p | `Build p | `Fetch p -> [p]
   | `Change (_,p1,p2) -> [p1; p2]
 
 let map_atomic_action f = function
@@ -166,6 +189,7 @@ let map_highlevel_action f = function
 let map_concrete_action f = function
   | #atomic_action as a -> map_atomic_action f a
   | `Build p -> `Build (f p)
+  | `Fetch p -> `Fetch (f p)
 
 let map_action f = function
   | #highlevel_action as a -> map_highlevel_action f a
@@ -176,7 +200,7 @@ let string_of_cause to_string =
     | a::b::c::_::_::_ -> Printf.sprintf "%s, %s, %s, etc." a b c
     | l -> String.concat ", " l in
   function
-  | Upstream_changes -> "upstream changes"
+  | Upstream_changes -> "upstream or system changes"
   | Use pkgs         -> Printf.sprintf "uses %s" (list_to_string pkgs)
   | Required_by pkgs ->
     Printf.sprintf "required by %s" (list_to_string pkgs)

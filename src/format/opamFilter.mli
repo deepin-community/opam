@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*    Copyright 2012-2015 OCamlPro                                        *)
+(*    Copyright 2012-2019 OCamlPro                                        *)
 (*    Copyright 2012 INRIA                                                *)
 (*                                                                        *)
 (*  All rights reserved. This file is distributed under the terms of the  *)
@@ -123,7 +123,11 @@ val ident_string: ?default:string -> env -> fident -> string
 (** Like [ident_value], but casts the result to a bool *)
 val ident_bool: ?default:bool -> env -> fident -> bool
 
-(** Rewrites [basename].in to [basename], expanding interpolations *)
+(** Rewrites [basename].in to [basename], expanding interpolations.
+    If the first line begins ["opam-version:"], assumes that expansion of
+    variables within strings should be properly escaped. In particular, this
+    means that Windows paths should expand correctly when generating .config
+    files. *)
 val expand_interpolations_in_file: env -> basename -> unit
 
 
@@ -195,3 +199,10 @@ val atomise_extended:
   filtered_formula ->
   (OpamPackage.Name.t * (filter * (relop * filter) option))
     OpamFormula.formula
+
+(* Uses [OpamFormula.sort] to sort on names, and sort version formulas with
+   [simplify_extended_version_formula]. *)
+val sort_filtered_formula:
+  ((name * filter filter_or_constraint OpamFormula.formula)
+  -> (name * filter filter_or_constraint OpamFormula.formula) -> int)
+  -> filtered_formula -> filtered_formula
